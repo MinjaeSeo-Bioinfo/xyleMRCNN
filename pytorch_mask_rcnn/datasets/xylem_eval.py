@@ -98,8 +98,9 @@ def prepare_for_xylem_coco(predictions):
         
         # to fit category xylem
         labels = [label - 1 for label in labels]
-        
-        masks = masks > 0.5
+
+        #@ debugging 0.5 to 0.01
+        masks = masks > 0.01
         rles = [
             mask_util.encode(np.array(mask[:, :, np.newaxis], dtype=np.uint8, order="F"))[0]
             for mask in masks
