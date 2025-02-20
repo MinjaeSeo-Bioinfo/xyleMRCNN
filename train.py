@@ -167,5 +167,5 @@ if __name__ == "__main__":
     if args.results is None:
         args.results = os.path.join(os.path.dirname(args.ckpt_path), "maskrcnn_results.pth")
         
-    args.results = "/gdrive/MyDrive/HyunsLab/Xylemrcnn/PyTorch-Simple-MaskRCNN/maskrcnn_results.pth"    
+    args.results = "/gdrive/MyDrive/HyunsLab/Xylemrcnn/xyleMRCNN/maskrcnn_results.pth"    
     main(args)
