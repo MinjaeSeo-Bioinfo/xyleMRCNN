@@ -105,7 +105,8 @@ class XylemDataset(GeneralizedDataset):
                 if isinstance(ann['segmentation'], list):
                     mask = self._poly2mask(ann['segmentation'], height, width)
                     masks.append(mask)
-                labels.append(self.cat_ids[ann['category_id']])
+                labels.append(self.cat_ids.get(ann['category_id'], 0))
+
         
         # Convert to tensors
         if len(boxes) > 0:
