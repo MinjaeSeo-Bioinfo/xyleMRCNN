@@ -107,9 +107,13 @@ def main(args):
         trained_epoch = epoch + 1
         print("training: {:.1f} s, evaluation: {:.1f} s".format(A, B))
         pmr.collect_gpu_info("maskrcnn", [1 / iter_train, 1 / iter_eval])
-        print(eval_output.get_AP())
-
-        pmr.save_ckpt(model, optimizer, trained_epoch, args.ckpt_path, eval_info=str(eval_output))
+        
+        #@ new codes for debugging
+        ap_values = eval_output.get_AP()
+        print(ap_values)
+        
+        pmr.save_ckpt(model, optimizer, trained_epoch, args.ckpt_path, 
+                      eval_info=str(eval_output), ap_values=ap_values)
 
         # it will create many checkpoint files during training, so delete some.
         prefix, ext = os.path.splitext(args.ckpt_path)
