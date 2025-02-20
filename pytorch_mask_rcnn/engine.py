@@ -66,23 +66,22 @@ def evaluate(model, data_loader, device, args, generate=True):
     iou_types = ["bbox", "segm"]
     #@ CocoEvaluator to XylemEvaluator(from xylem_eval.py)
     coco_evaluator = XylemEvaluator(dataset.coco, iou_types)
-
     results = torch.load(args.results, map_location="cpu")
-
     S = time.time()
     coco_evaluator.accumulate(results)
     print("accumulate: {:.1f}s".format(time.time() - S))
-
     # collect outputs of buildin function print
     temp = sys.stdout
     sys.stdout = TextArea()
-
     coco_evaluator.summarize()
-
     output = sys.stdout
     sys.stdout = temp
+    
+    # 명시적으로 output.get_AP() 호출하여 AP 값 계산
+    ap_values = output.get_AP()
+    print(ap_values)  # AP 값 출력
         
-    return output, iter_eval
+    return output, iter_eval, ap_values  # ap_values도 함께 반환
     
     
 # generate results file   
