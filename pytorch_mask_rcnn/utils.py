@@ -29,15 +29,15 @@ class TextArea:
     def __str__(self):
         return "".join(self.buffer)
 
-    #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
     def extract_ap(self, lines):
-        """To find AP values that meet specific conditions"""
+        """Extract AP values from filtered lines"""
         for line in lines:
             if "IoU=0.50:0.95" in line and "area=   all" in line and "maxDets=100" in line:
                 match = re.search(r"(-?[0-9]+\.[0-9]+)", line)
                 if match:
                     ap_value = float(match.group(1))
-                    return max(ap_value, 0.0)  # -1.000이면 0.0 반환(-1 > 평가할 수 없는 경우)
+                    print(f"Extracted AP from line '{line}': {ap_value}")  # 디버깅 추가
+                    return max(ap_value, 0.0)  # -1.000이면 0.0 반환
         return 0.0 
 
     def get_AP(self):
@@ -46,25 +46,25 @@ class TextArea:
         txt = str(self)
         print("Evaluation Output:", txt)
         
-        # separate bbox & segm section
+        # Separate bbox & segm sections
         bbox_section = txt.split("IoU metric: bbox")[-1].split("IoU metric: segm")[0]
         mask_section = txt.split("IoU metric: segm")[-1]
         
-        # filtering AP value
+        # Filter AP values
         bbox_ap_lines = [line for line in bbox_section.split("\n") if "Average Precision" in line]
         mask_ap_lines = [line for line in mask_section.split("\n") if "Average Precision" in line]
 
-        print("Filtered BBox AP Lines:", bbox_ap_lines)
-        print("Filtered Mask AP Lines:", mask_ap_lines)
+        print("Filtered BBox AP Lines:", bbox_ap_lines)  # 디버깅 추가
+        print("Filtered Mask AP Lines:", mask_ap_lines)  # 디버깅 추가
 
         try:
             result["bbox AP"] = self.extract_ap(bbox_ap_lines)
             result["mask AP"] = self.extract_ap(mask_ap_lines)
         except Exception as e:
             print("Failed to parse AP values:", e)
-    #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-        return result
 
+        print("Final AP result:", result)  # 최종 결과 확인
+        return result
 
 class Meter:
     def __init__(self, name):
