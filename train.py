@@ -101,7 +101,7 @@ def main(args):
         A = time.time() - A
         
         B = time.time()
-        eval_output, iter_eval = pmr.evaluate(model, d_test, device, args)
+        eval_output, iter_eval, ap_values = pmr.evaluate(model, d_test, device, args)
         B = time.time() - B
 
         trained_epoch = epoch + 1
