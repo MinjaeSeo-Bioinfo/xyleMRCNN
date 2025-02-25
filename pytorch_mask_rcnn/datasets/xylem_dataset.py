@@ -3,121 +3,91 @@ import cv2
 import json
 import numpy as np
 import torch
-import math
-import random
 from PIL import Image
 from pycocotools.coco import COCO
 from .generalized_dataset import GeneralizedDataset
-from .xylem_dataset_utils import apply_albumentations_transforms, visualize_masks
-import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
-import albumentations as A
+import torchvision.transforms as transforms
 
 class XylemDataset(GeneralizedDataset):
-    def __init__(self, data_dir, split='train', train=True):
+    def __init__(self, data_dir, split, train=False):
         super().__init__()
+        from pycocotools.coco import COCO
         
         self.data_dir = data_dir
         self.split = split
         self.train = train
         
-        # Define paths according to your structure
+        #@@
         self.img_dir = os.path.join(data_dir, split)
         ann_file = os.path.join(data_dir, "annotations", f"result_{split}.json")
-        
-        # Initialize COCO API properly
+        #@@
         self.coco = COCO(ann_file)
+        self.ids = [str(k) for k in self.coco.imgs]
         
-        # Get categories
-        cats = self.coco.loadCats(self.coco.getCatIds())
-        
-        # Use COCO API methods
-        img_ids = self.coco.getImgIds()
-        ann_ids = self.coco.getAnnIds()
-        
-        print(f"Dataset: {split}")
-        print(f"Total images: {len(img_ids)}")
-        print(f"Total annotations: {len(ann_ids)}")
-        
-        # Prepare image IDs
-        self.ids = list(sorted(img_ids))
-        
-        # Create category mapping
+        # classes's values must start from 1, because 0 means background in the model
+        self.classes = [0]  # 배경 클래스
+        self.classes.extend(sorted(self.coco.cats.keys()))
+
+        checked_id_file = os.path.join(data_dir, "checked_{}.txt".format(split))
+        if train:
+            if not os.path.exists(checked_id_file):
+                self._aspect_ratios = [v["width"] / v["height"] for v in self.coco.imgs.values()]
+            self.check_dataset(checked_id_file)
+            
+        #@ Create category mapping
+        cats = list(self.coco.cats.values())
         self.cat_ids = {cat['id']: i+1 for i, cat in enumerate(cats)}
-        
-        # Add class information (including background)
-        self.cat_names = ['background'] + [cat['name'] for cat in cats]
-        self.classes = list(range(len(self.cat_names)))
-        
-        # Print category information
+
+        #@ Print category information
         print("Categories:")
         for cat in cats:
             print(f"- {cat['name']} (ID: {cat['id']})")
-        
-        # Calculate aspect ratios
-        self._aspect_ratios = []
-        for img_id in self.ids:
-            img_info = self.coco.loadImgs(img_id)[0]
-            self._aspect_ratios.append(float(img_info['width']) / float(img_info['height']))
+            
 
     def get_image(self, img_id):
-        """Load and return image"""
-        img_info = self.coco.loadImgs(img_id)[0]
+        img_id = int(img_id)
+        img_info = self.coco.imgs[img_id]
+        image = Image.open(os.path.join(self.data_dir, "{}".format(self.split), img_info["file_name"]))
+        return image.convert("RGB")
+        #@
+        # print(f"Total images: {len(img_ids)}")
         
-        # Clean up the file name
-        file_name = img_info['file_name'].replace('\\', '/')
-        if file_name.startswith('images/'):
-            file_name = file_name.replace('images/', '')
+    def convert_to_xyxy(self, boxes):
+        if boxes is None or len(boxes) == 0:
+            return boxes
+            
+        # [x, y, width, height]를 [x1, y1, x2, y2]로 변환
+        x1 = boxes[:, 0]
+        y1 = boxes[:, 1]
+        x2 = boxes[:, 0] + boxes[:, 2]
+        y2 = boxes[:, 1] + boxes[:, 3]
         
-        img_path = os.path.join(self.img_dir, file_name)
-        return Image.open(img_path).convert('RGB')
+        # [x1, y1, x2, y2] 형식으로 스택
+        return torch.stack((x1, y1, x2, y2), dim=1)
     
     def get_target(self, img_id):
-        target = {}
-        target["image_id"] = torch.tensor([img_id])
-        
-        # Get annotations using COCO API
-        ann_ids = self.coco.getAnnIds(imgIds=img_id)
+        img_id = int(img_id)
+        ann_ids = self.coco.getAnnIds(img_id)
         anns = self.coco.loadAnns(ann_ids)
-        
-        # Get image info
-        img_info = self.coco.loadImgs(img_id)[0]
-        height, width = img_info['height'], img_info['width']
-        
         boxes = []
-        masks = []
         labels = []
-        
-        for ann in anns:
-            # COCO bbox format is [x, y, width, height]
-            x, y, w, h = ann['bbox']
-            
-            # Convert to [x1, y1, x2, y2] format and ensure within image bounds
-            x1 = max(0, x)
-            y1 = max(0, y)
-            x2 = min(width, x + w)
-            y2 = min(height, y + h)
-            
-            # Only add valid boxes
-            if x2 > x1 and y2 > y1:
-                boxes.append([x1, y1, x2, y2])
-                
-                if isinstance(ann['segmentation'], list):
-                    mask = self._poly2mask(ann['segmentation'], height, width)
-                    masks.append(mask)
-                labels.append(self.cat_ids.get(ann['category_id'], 0))
+        masks = []
 
-        
-        # Convert to tensors
-        if len(boxes) > 0:
+        if len(anns) > 0:
+            for ann in anns:
+                boxes.append(ann['bbox'])
+                labels.append(ann["category_id"])
+                mask = self.coco.annToMask(ann)
+                mask = torch.tensor(mask, dtype=torch.uint8)
+                masks.append(mask)
+
             boxes = torch.tensor(boxes, dtype=torch.float32)
-        else:
-            boxes = torch.zeros((0, 4), dtype=torch.float32)
-        
-        target["boxes"] = boxes
-        target["labels"] = torch.tensor(labels, dtype=torch.int64)
-        target["masks"] = torch.stack(masks) if masks else torch.zeros((0, height, width), dtype=torch.uint8)
-        
+            boxes = self.convert_to_xyxy(boxes)
+            labels = torch.tensor(labels, dtype=torch.long)
+            masks = torch.stack(masks)
+
+        target = dict(image_id=torch.tensor([img_id]), boxes=boxes, labels=labels, masks=masks)
         return target
 
     def _poly2mask(self, polygons, height, width):
@@ -139,78 +109,12 @@ class XylemDataset(GeneralizedDataset):
             # Convert to binary mask (0 or 1)
             mask = (mask > 0).astype(np.uint8)
             
-            # Debug print
-            print(f"Mask sum: {mask.sum()}, unique values: {np.unique(mask)}")
-            
             return torch.from_numpy(mask)
             
         except Exception as e:
             print(f"Error in polygon to mask conversion: {e}")
             print(f"Polygon shape: {np.array(polygons).shape}")
             return torch.zeros((height, width), dtype=torch.uint8)
-    
-    def apply_transforms(self, image, target):
-        if not self.train:
-            return F.normalize(F.to_tensor(image), 
-            mean=[0.485, 0.456, 0.406], 
-            std=[0.229, 0.224, 0.225]), target
-        
-        # 1. Get original image
-        h, w = image.size[1], image.size[0]
-        
-        # 2. Get data from target
-        # Bbox format change, [x1, y1, x2, y2] -> [x, y, w, h]
-        if len(target['boxes']):
-            bboxes = []
-            for box in target['boxes'].numpy():
-                x1, y1, x2, y2 = box
-                bboxes.append([x1, y1, x2-x1, y2-y1])
-            
-            # Convert mask to numpy array
-            masks = target['masks'].numpy() if len(target['masks']) > 0 else []
-            labels = target['labels'].numpy().tolist()
-            
-            # 3. Albumentations transform 
-            pil_image, transformed_masks, transformed_bboxes, transformed_labels = apply_albumentations_transforms(
-                image=image,
-                masks=masks,
-                bboxes=bboxes,
-                class_labels=labels,
-                height=h,
-                width=w
-            )
-            
-            # 4. Align the converted data back to the target
-            # [x, y, w, h] -> [x1, y1, x2, y2] 
-            if transformed_bboxes:
-                final_boxes = []
-                for box in transformed_bboxes:
-                    x, y, w, h = box
-                    final_boxes.append([x, y, x+w, y+h])
-                
-                target['boxes'] = torch.tensor(final_boxes, dtype=torch.float32)
-                target['masks'] = torch.tensor(transformed_masks, dtype=torch.uint8)
-                target['labels'] = torch.tensor(transformed_labels, dtype=torch.int64)
-            else:
-                # Generate an empty tensor if there are no boxes after conversion
-                target['boxes'] = torch.zeros((0, 4), dtype=torch.float32)
-                target['masks'] = torch.zeros((0, h, w), dtype=torch.uint8)
-                target['labels'] = torch.zeros(0, dtype=torch.int64)
-            
-            # 5. Convert an image to a tensor and normalize it
-            image = F.to_tensor(pil_image)
-            image = F.normalize(image,
-                              mean=[0.485, 0.456, 0.406],
-                              std=[0.229, 0.224, 0.225])
-            
-            return image, target
-        else:
-            # Apply basic normalization if the box is not present
-            image = F.to_tensor(image) 
-            image = F.normalize(image,
-                              mean=[0.485, 0.456, 0.406],
-                              std=[0.229, 0.224, 0.225])
-        return image, target
 
     def visualize_sample(self, idx):
         """Visualize a sample of a specific index"""
@@ -221,17 +125,8 @@ class XylemDataset(GeneralizedDataset):
         img_id = self.ids[idx]
         image = self.get_image(img_id)
         target = self.get_target(img_id)
+        image = F.to_tensor(image)
 
-        if self.train:
-            image, target = self.apply_transforms(image, target)
-        
-        # Image should already be tensor after apply_transforms
-        if isinstance(image, Image.Image):
-            image = F.to_tensor(image)
-            image = F.normalize(image,
-                             mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
-        
         return image, target
         
     def __len__(self):
