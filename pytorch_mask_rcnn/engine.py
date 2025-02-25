@@ -12,7 +12,7 @@ except:
 def train_one_epoch(model, optimizer, data_loader, device, epoch, args):
     for p in optimizer.param_groups:
         p["lr"] = args.lr_epoch
-    # args.iter < 0이면 전체 데이터셋을 학습
+
     iters = len(data_loader) if args.iters < 0 else args.iters
 
     t_m = Meter("total")
@@ -23,7 +23,6 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, args):
     for i, (image, target) in enumerate(data_loader):
         T = time.time()
         num_iters = epoch * len(data_loader) + i
-        # 안정적인 학습 보조 warmup_iter
         if num_iters <= args.warmup_iters:
             r = num_iters / args.warmup_iters
             for j, p in enumerate(optimizer.param_groups):
@@ -36,18 +35,17 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, args):
         losses = model(image, target)
         total_loss = sum(losses.values())
         m_m.update(time.time() - S)
-        
+            
         S = time.time()
         total_loss.backward()
         b_m.update(time.time() - S)
         
         optimizer.step()
         optimizer.zero_grad()
-        
-        #@ add True for debugging
+
         if num_iters % args.print_freq == 0 or True:
             print("{}\t".format(num_iters), "\t".join("{:.3f}".format(l.item()) for l in losses.values()))
-        
+
         t_m.update(time.time() - T)
         if i >= iters - 1:
             break
@@ -76,12 +74,8 @@ def evaluate(model, data_loader, device, args, generate=True):
     coco_evaluator.summarize()
     output = sys.stdout
     sys.stdout = temp
-    
-    # 명시적으로 output.get_AP() 호출하여 AP 값 계산
-    ap_values = output.get_AP()
-    print(ap_values)  # AP 값 출력
         
-    return output, iter_eval, ap_values  # ap_values도 함께 반환
+    return output, iter_eval
     
     
 # generate results file   
