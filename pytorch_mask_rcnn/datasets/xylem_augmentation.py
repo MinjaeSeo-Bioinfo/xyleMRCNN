@@ -31,23 +31,57 @@ np.random.seed(77)
 torch.manual_seed(77)
 
 def augment_dataset(json_path, img_dir, output_img_dir, output_json_path, num_augmentations=20, visualize=False):
-    """
-    데이터셋 증강 및 COCO JSON 파일 업데이트
-    
-    Args:
-        json_path: 기존 COCO JSON 파일 경로
-        img_dir: 기존 이미지 디렉토리
-        output_img_dir: 증강된 이미지 저장 디렉토리
-        output_json_path: 업데이트된 JSON 파일 저장 경로
-        num_augmentations: 각 이미지당 생성할 증강 이미지 수
-        visualize: 증강 결과 시각화 여부
-    """
     # 기존 COCO JSON 파일 로드
     with open(json_path, 'r') as f:
         coco_data = json.load(f)
     
-    # COCO API 초기화
-    coco = COCO(json_path)
+    # 카테고리 정보 업데이트 (xylem ID를 0에서 1로 변경)
+    for category in coco_data['categories']:
+        if category['id'] == 0:  # xylem 클래스인 경우
+            category['id'] = 1
+            print(f"Xylem 카테고리 ID를 1로 변경했습니다: {category['name']}")
+    
+    # 기존 어노테이션의 카테고리 ID도 업데이트
+    for ann in coco_data['annotations']:
+        if ann['category_id'] == 0:  # xylem 클래스인 경우
+            ann['category_id'] = 1
+    
+    # 이미지 ID를 0에서 1로 시작하도록 변경
+    img_id_mapping = {}  # 기존 ID -> 새 ID 매핑
+    new_images = []
+    
+    for idx, img in enumerate(coco_data['images']):
+        old_id = img['id']
+        new_id = idx + 1  # 1부터 시작
+        img_id_mapping[old_id] = new_id
+        
+        img_copy = img.copy()
+        img_copy['id'] = new_id
+        new_images.append(img_copy)
+    
+    # 어노테이션의 image_id 업데이트
+    new_annotations = []
+    for ann in coco_data['annotations']:
+        old_img_id = ann['image_id']
+        if old_img_id in img_id_mapping:
+            ann_copy = ann.copy()
+            ann_copy['image_id'] = img_id_mapping[old_img_id]
+            new_annotations.append(ann_copy)
+    
+    # 업데이트된 데이터로 coco_data 갱신
+    coco_data['images'] = new_images
+    coco_data['annotations'] = new_annotations
+    
+    # 업데이트된 JSON 임시 저장
+    temp_json_path = json_path + '.temp'
+    with open(temp_json_path, 'w') as f:
+        json.dump(coco_data, f)
+    
+    # 업데이트된 JSON으로 COCO API 초기화
+    coco = COCO(temp_json_path)
+    
+    # 임시 파일 제거
+    os.remove(temp_json_path)
     
     # 데이터 구조 복사
     new_coco_data = copy.deepcopy(coco_data)
@@ -59,20 +93,24 @@ def augment_dataset(json_path, img_dir, output_img_dir, output_json_path, num_au
     new_img_id = max_img_id + 1
     new_ann_id = max_ann_id + 1
     
-    # 새로운 이미지와 어노테이션 리스트 초기화
-    new_images = []
-    new_annotations = []
+    # 새로운 증강 이미지와 어노테이션 리스트 초기화
+    aug_images = []
+    aug_annotations = []
     
     # 모든 이미지 ID
     img_ids = coco.getImgIds()
     
     print(f"증강 시작: 원본 이미지 {len(img_ids)}개, 각 이미지당 {num_augmentations}개 증강")
+    print(f"이미지 ID 범위: {min(img_ids)}부터 {max(img_ids)}까지")
     
     # 각 이미지에 대해 증강 수행
     for img_id in tqdm(img_ids):
         # 이미지 정보 로드
         img_info = coco.loadImgs(img_id)[0]
         img_path = os.path.join(img_dir, img_info['file_name'])
+        
+        # 나머지 기존 코드는 그대로 유지...
+        # (이미지 로드, 어노테이션 로드, 증강 등)
         
         # 이미지 로드
         image = Image.open(img_path).convert('RGB')
@@ -100,14 +138,13 @@ def augment_dataset(json_path, img_dir, output_img_dir, output_json_path, num_au
         # 각 이미지에 대해 여러 개의 증강 이미지 생성
         for aug_idx in range(num_augmentations):
             try:
-                # 증강 적용 - 올려주신 코드의 함수 활용
+                # 증강 적용
                 aug_image, aug_masks, aug_bboxes, aug_labels = apply_albumentations_transforms(
                     image, masks, bboxes, class_labels, height, width
                 )
                 
                 # 시각화 (필요한 경우)
-                if visualize and aug_idx == 0:  # 첫 번째 증강 결과만 시각화
-                    # 텐서로 변환하여 시각화
+                if visualize and aug_idx == 0:
                     tensor_masks = torch.from_numpy(np.array(aug_masks))
                     tensor_boxes = torch.tensor(aug_bboxes)
                     target = {'masks': tensor_masks, 'boxes': tensor_boxes}
@@ -131,7 +168,7 @@ def augment_dataset(json_path, img_dir, output_img_dir, output_json_path, num_au
                     'coco_url': img_info.get('coco_url', ''),
                     'date_captured': img_info.get('date_captured', '')
                 }
-                new_images.append(new_img_info)
+                aug_images.append(new_img_info)
                 
                 # 증강된 어노테이션 추가
                 for i, (bbox, mask, label) in enumerate(zip(aug_bboxes, aug_masks, aug_labels)):
@@ -159,17 +196,20 @@ def augment_dataset(json_path, img_dir, output_img_dir, output_json_path, num_au
                     if w < 5 or h < 5:
                         continue
                     
+                    # 클래스 ID 변경
+                    new_label = 1 if label == 0 else label
+                    
                     # 새로운 어노테이션 추가
                     new_ann = {
                         'id': new_ann_id,
                         'image_id': new_img_id,
-                        'category_id': label,
+                        'category_id': new_label,
                         'segmentation': segmentation,
                         'area': float(w * h),
                         'bbox': [x, y, w, h],
                         'iscrowd': 0
                     }
-                    new_annotations.append(new_ann)
+                    aug_annotations.append(new_ann)
                     new_ann_id += 1
                 
                 new_img_id += 1
@@ -179,17 +219,17 @@ def augment_dataset(json_path, img_dir, output_img_dir, output_json_path, num_au
                 continue
     
     # 기존 데이터와 새로운 데이터 결합
-    new_coco_data['images'].extend(new_images)
-    new_coco_data['annotations'].extend(new_annotations)
+    new_coco_data['images'].extend(aug_images)
+    new_coco_data['annotations'].extend(aug_annotations)
     
     # 업데이트된 COCO JSON 파일 저장
     with open(output_json_path, 'w') as f:
         json.dump(new_coco_data, f)
     
-    print(f"증강 완료: 원본 이미지 {len(img_ids)}개, 생성된 증강 이미지 {len(new_images)}개")
-    print(f"원본 어노테이션 {len(coco_data['annotations'])}개, 증강 어노테이션 {len(new_annotations)}개")
+    print(f"증강 완료: 원본 이미지 {len(img_ids)}개, 생성된 증강 이미지 {len(aug_images)}개")
+    print(f"원본 어노테이션 {len(coco_data['annotations'])}개, 증강 어노테이션 {len(aug_annotations)}개")
     print(f"증강된 데이터셋이 {output_json_path}에 저장되었습니다.")
-
+    
 # 실행 예시
 def main():
     # 이미지 디렉토리와 JSON 파일 경로 확인
