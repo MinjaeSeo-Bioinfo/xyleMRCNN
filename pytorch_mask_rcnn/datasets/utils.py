@@ -1,19 +1,14 @@
-from .coco_dataset import COCODataset
-from .xylem_dataset import XylemDataset  # Add this import
+from .xylem_dataset import XylemDataset
 
 __all__ = ["datasets", "collate_wrapper"]
 
 def datasets(ds, *args, **kwargs):
     ds = ds.lower()
-    #@@@@@@@@ voc to xylem @@@@@@@@@@
-    choice = ["coco", "xylem"]  # Add "xylem" to choices
+    choice = ["xylem"]  # Only Xylem dataset
     if ds == choice[0]:
-        return COCODataset(*args, **kwargs)
-    if ds == choice[1]:
         return XylemDataset(*args, **kwargs)
     else:
         raise ValueError("'ds' must be in '{}', but got '{}'".format(choice, ds))
-    #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
     
 def collate_wrapper(batch):
     return CustomBatch(batch)

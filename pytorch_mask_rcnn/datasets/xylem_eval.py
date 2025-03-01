@@ -92,15 +92,10 @@ def prepare_for_xylem_coco(predictions):
         scores = prediction["scores"].tolist()
         labels = prediction["labels"].tolist()
         
-        #@ Debugging
-        if len(labels) > 0:
-            print(f"Original labels (first 5): {labels[:5]}")
-        
-        # to fit category xylem
+        #@
         labels = [label - 1 for label in labels]
 
-        #@ debugging 0.5 to 0.01
-        masks = masks > 0.01
+        masks = masks > 0.5
         rles = [
             mask_util.encode(np.array(mask[:, :, np.newaxis], dtype=np.uint8, order="F"))[0]
             for mask in masks
@@ -122,23 +117,3 @@ def prepare_for_xylem_coco(predictions):
         )
 
     return coco_results
-    
-    #     #@@@@ result가 빈 경우 포함 x @@@@@@@@@
-    #     results = [
-    #         {
-    #             "image_id": original_id,
-    #             "category_id": labels[i],
-    #             "bbox": boxes[i],
-    #             "segmentation": rle,
-    #             "score": scores[i],
-    #         }
-    #         for i, rle in enumerate(rles)
-    #     ]
-        
-    #     if len(results) > 0:
-    #         print(f"Generated {len(results)} results for image {original_id}")
-    #         print(f"Sample category_id: {results[0]['category_id']}")
-            
-    #     coco_results.extend(results)
-    # print(f"Total results: {len(coco_results)}")
-    #     #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@

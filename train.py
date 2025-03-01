@@ -101,19 +101,15 @@ def main(args):
         A = time.time() - A
         
         B = time.time()
-        eval_output, iter_eval, ap_values = pmr.evaluate(model, d_test, device, args)
+        eval_output, iter_eval = pmr.evaluate(model, d_test, device, args)
         B = time.time() - B
 
         trained_epoch = epoch + 1
         print("training: {:.1f} s, evaluation: {:.1f} s".format(A, B))
         pmr.collect_gpu_info("maskrcnn", [1 / iter_train, 1 / iter_eval])
         
-        #@ new codes for debugging
-        ap_values = eval_output.get_AP()
-        print(ap_values)
-        
         pmr.save_ckpt(model, optimizer, trained_epoch, args.ckpt_path, 
-                      eval_info=str(eval_output), ap_values=ap_values)
+                      eval_info=str(eval_output))
 
         # it will create many checkpoint files during training, so delete some.
         prefix, ext = os.path.splitext(args.ckpt_path)
