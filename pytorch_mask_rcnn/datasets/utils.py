@@ -24,3 +24,4 @@ class CustomBatch:
         self.images = [img.pin_memory() for img in self.images]
         self.targets = [{k: v.pin_memory() for k, v in tgt.items()} for tgt in self.targets]
         return self
+

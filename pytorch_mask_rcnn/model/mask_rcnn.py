@@ -85,14 +85,15 @@ class MaskRCNN(nn.Module):
                  rpn_reg_weights=(1., 1., 1., 1.),
                  rpn_pre_nms_top_n_train=2000, rpn_pre_nms_top_n_test=1000,
                  rpn_post_nms_top_n_train=2000, rpn_post_nms_top_n_test=1000,
-                 #@ nms changed 0.7 to 0.3
-                 rpn_nms_thresh=0.3,
+                 #@@@@@@@@@@@@ rpn_nms_thresh 0.7 to 0.6
+                 rpn_nms_thresh=0.6,
                  # RoIHeads parameters
                  box_fg_iou_thresh=0.5, box_bg_iou_thresh=0.5,
                  box_num_samples=512, box_positive_fraction=0.25,
-                 box_reg_weights=(10., 10., 5., 5.),
-                 #@ nms changed score_thresh: 0.1 to 0.05 nms_thresh: 0.6 to 0.3
-                 box_score_thresh=0.05, box_nms_thresh=0.3, box_num_detections=100):
+                 # 원래 (10, 10, 5, 5)에서 증가
+                 box_reg_weights=(15., 15., 7.5, 7.5),
+                 #@@@@@@@@@@@@ box_nms_thresh 0.6 to 0.5
+                 box_score_thresh=0.1, box_nms_thresh=0.5, box_num_detections=100):
         super().__init__()
         self.backbone = backbone
         out_channels = backbone.out_channels

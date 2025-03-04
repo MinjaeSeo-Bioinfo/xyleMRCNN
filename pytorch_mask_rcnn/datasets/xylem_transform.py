@@ -52,7 +52,6 @@ def visualize_masks(image, target):
     plt.tight_layout()
     plt.show()
 
-
 def apply_albumentations_transforms(image, masks, bboxes, class_labels, height, width):
     """
     Albumentations lib for data augmentation
@@ -75,34 +74,26 @@ def apply_albumentations_transforms(image, masks, bboxes, class_labels, height, 
         A.RandomRotate90(p=0.5),
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
-        A.Transpose(p=0.3), # 이미지 행과 열 교환
-        A.GaussNoise(var=(10.0, 50.0), p=0.3),
         A.OneOf([
-            A.MotionBlur(blur_limit=7, p=0.2),
-            A.MedianBlur(blur_limit=5, p=0.2),
-            A.Blur(blur_limit=5, p=0.2),
-        ], p=0.2),
-        # name changed (ShiftScaleRotate to Affine)
+            A.CLAHE(clip_limit=2, p=0.7),
+            A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.7),
+        ], p=0.5),
+        A.ISONoise(color_shift=(0.005, 0.02), intensity=(0.05, 0.15), p=0.2),
         A.Affine(
-            translate_percent={"x": (-0.0625, 0.0625), "y": (-0.0625, 0.0625)},
-            scale=(0.8, 1.2),
-            rotate=(-45, 45),
+            translate_percent={"x": (-0.03, 0.03), "y": (-0.03, 0.03)},
+            scale=(0.9, 1.1),
+            rotate=(-15, 15),
             border_mode=cv2.BORDER_CONSTANT,
             p=0.5
         ),
         A.OneOf([
-            A.OpticalDistortion(distort_limit=0.05, p=0.3), # 광학 왜곡
-            A.GridDistortion(num_steps=5, distort_limit=0.05, p=0.3), # 그리드 왜곡
-        ], p=0.3),
-        A.OneOf([
-            A.CLAHE(clip_limit=2, p=0.5),
-            A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
-        ], p=0.5),
-        A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=0.3),# 색조, 채도, 명도 변경
-        A.Resize(height=height, width=width, p=1.0),
+            A.OpticalDistortion(distort_limit=0.03, p=0.3),
+            A.GridDistortion(num_steps=5, distort_limit=0.03, p=0.3),
+        ], p=0.2),
+        A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=15, val_shift_limit=10, p=0.3),
     ], bbox_params=A.BboxParams(
-        format='coco',  # [x_min, y_min, width, height]
-        min_visibility=0.3,# 최소 가시성 보장
+        format='coco',
+        min_visibility=0.3,
         label_fields=['class_labels']
     ))
     
