@@ -76,7 +76,7 @@ class XylemEvaluator:
         else:
             print("evaluation has no results")
     #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-
+    
 def prepare_for_xylem_coco(predictions):
     coco_results = []
     for original_id, prediction in predictions.items():
@@ -92,9 +92,6 @@ def prepare_for_xylem_coco(predictions):
         boxes = boxes.tolist()
         scores = prediction["scores"].tolist()
         labels = prediction["labels"].tolist()
-        
-        #@
-        labels = [label - 1 for label in labels]
 
         masks = masks > 0.5
         rles = [
@@ -116,5 +113,5 @@ def prepare_for_xylem_coco(predictions):
                 for i, rle in enumerate(rles)
             ]
         )
-        
+
     return coco_results
