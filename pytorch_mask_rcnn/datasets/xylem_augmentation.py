@@ -9,8 +9,6 @@ from pycocotools.coco import COCO
 from tqdm import tqdm
 import copy
 import matplotlib.pyplot as plt
-
-# 올려주신 코드의 함수들을 활용
 from .xylem_transform import apply_albumentations_transforms, masks_from_polygons, visualize_masks
 
 # 경로 설정
@@ -35,24 +33,37 @@ def augment_dataset(json_path, img_dir, output_img_dir, output_json_path, num_au
     with open(json_path, 'r') as f:
         coco_data = json.load(f)
     
-    # 카테고리 정보 업데이트 (xylem ID를 0에서 1로 변경)
+    # 카테고리 정보 업데이트
     for category in coco_data['categories']:
         if category['id'] == 0:  # xylem 클래스인 경우
             category['id'] = 1
             print(f"Xylem 카테고리 ID를 1로 변경했습니다: {category['name']}")
     
-    # 기존 어노테이션의 카테고리 ID도 업데이트
-    for ann in coco_data['annotations']:
-        if ann['category_id'] == 0:  # xylem 클래스인 경우
-            ann['category_id'] = 1
+    # 어노테이션 ID를 1부터 시작하도록 변경
+    ann_id_mapping = {}  # 기존 ID -> 새 ID 매핑
+    new_annotations = []
     
-    # 이미지 ID를 0에서 1로 시작하도록 변경
+    for idx, ann in enumerate(coco_data['annotations']):
+        old_id = ann['id']
+        new_id = idx + 1
+        ann_id_mapping[old_id] = new_id
+        
+        ann_copy = ann.copy()
+        ann_copy['id'] = new_id
+        
+        # 카테고리 ID도 변경
+        if ann_copy['category_id'] == 0:
+            ann_copy['category_id'] = 1
+            
+        new_annotations.append(ann_copy)
+    
+    # 이미지 ID를 1부터 시작하도록 변경
     img_id_mapping = {}  # 기존 ID -> 새 ID 매핑
     new_images = []
     
     for idx, img in enumerate(coco_data['images']):
         old_id = img['id']
-        new_id = idx + 1  # 1부터 시작
+        new_id = idx + 1 
         img_id_mapping[old_id] = new_id
         
         img_copy = img.copy()
@@ -60,13 +71,10 @@ def augment_dataset(json_path, img_dir, output_img_dir, output_json_path, num_au
         new_images.append(img_copy)
     
     # 어노테이션의 image_id 업데이트
-    new_annotations = []
-    for ann in coco_data['annotations']:
+    for ann in new_annotations:
         old_img_id = ann['image_id']
         if old_img_id in img_id_mapping:
-            ann_copy = ann.copy()
-            ann_copy['image_id'] = img_id_mapping[old_img_id]
-            new_annotations.append(ann_copy)
+            ann['image_id'] = img_id_mapping[old_img_id]
     
     # 업데이트된 데이터로 coco_data 갱신
     coco_data['images'] = new_images
@@ -86,8 +94,8 @@ def augment_dataset(json_path, img_dir, output_img_dir, output_json_path, num_au
     # 데이터 구조 복사
     new_coco_data = copy.deepcopy(coco_data)
     
-    # 새로운 이미지와 어노테이션을 위한 ID 카운터 초기화
-    max_img_id = max([img['id'] for img in coco_data['images']])
+    # 새로운 증강 시 시작 ID 계산
+    max_img_id = max([img['id'] for img in coco_data['images']]) 
     max_ann_id = max([ann['id'] for ann in coco_data['annotations']])
     
     new_img_id = max_img_id + 1
@@ -254,3 +262,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
