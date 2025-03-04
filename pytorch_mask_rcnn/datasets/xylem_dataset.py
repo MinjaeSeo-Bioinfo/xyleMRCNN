@@ -19,13 +19,13 @@ class XylemDataset(GeneralizedDataset):
         self.train = train
         
         # 이미지 및 어노테이션 경로 설정
-        self.img_dir = os.path.join(data_dir, split)
-        ann_file = os.path.join(data_dir, "annotations", f"result_{split}.json")
+        self.img_dir = os.path.join(data_dir, "augmented", "images", split)
+        ann_file = os.path.join(data_dir, "augmented", "annotations", f"augmentation_{split}.json")
         
         # COCO API 초기화
         self.coco = COCO(ann_file)
         
-        # 이미지 ID 가져오기
+        # 이미지 ID 가져오기 (확실하게 정수로 변환)
         img_ids = sorted([int(img_id) for img_id in self.coco.getImgIds()])
         print(f"이미지 ID 범위: {min(img_ids)}부터 {max(img_ids)}까지, 총 {len(img_ids)}개")
         self.ids = img_ids  # 명확하게 정수 리스트로 저장
@@ -40,7 +40,7 @@ class XylemDataset(GeneralizedDataset):
         print(f"COCO 이미지 ID 범위: {min(coco_img_ids)}부터 {max(coco_img_ids)}까지")
         
         # 클래스 정의 (배경은 0)
-        self.classes = [0]
+        self.classes = [0]  # 배경 클래스
         self.classes.extend(sorted(self.coco.cats.keys()))
 
         # 데이터셋 체크
@@ -49,7 +49,8 @@ class XylemDataset(GeneralizedDataset):
             if not os.path.exists(checked_id_file):
                 self._aspect_ratios = [v["width"] / v["height"] for v in self.coco.imgs.values()]
             self.check_dataset(checked_id_file)
-            
+        
+        # check_dataset에서 self.ids가 문자열로 변경되었을 수 있으므로 다시 정수로 변환
         self.ids = [int(id) for id in self.ids]
         
         # 확인 출력
@@ -69,7 +70,7 @@ class XylemDataset(GeneralizedDataset):
         # debugging !
         print(f"self.ids의 첫 번째 ID 타입: {type(self.ids[0])}")
         print(f"self.coco.imgs의 첫 번째 키 타입: {type(next(iter(self.coco.imgs.keys())))}")
-
+            
     def get_image(self, img_id):
         # 이미지 ID 타입 확인 및 변환
         if isinstance(img_id, str):
@@ -80,7 +81,8 @@ class XylemDataset(GeneralizedDataset):
             raise KeyError(f"이미지 ID {img_id}가 데이터셋에 존재하지 않습니다. 유효한 ID 범위: {min(self.ids)}~{max(self.ids)}")
         
         img_info = self.coco.imgs[img_id]
-        image_path = os.path.join(self.data_dir, "{}".format(self.split), img_info["file_name"])
+        # 여기를 수정 - self.img_dir 경로 사용
+        image_path = os.path.join(self.img_dir, img_info["file_name"])
         
         # 파일 존재 여부 확인
         if not os.path.isfile(image_path):
@@ -154,12 +156,7 @@ class XylemDataset(GeneralizedDataset):
             print(f"Error in polygon to mask conversion: {e}")
             print(f"Polygon shape: {np.array(polygons).shape}")
             return torch.zeros((height, width), dtype=torch.uint8)
-
-    def visualize_sample(self, idx):
-        """Visualize a sample of a specific index"""
-        image, target = self[idx]
-        visualize_masks(image, target)
-        
+ 
     def __getitem__(self, idx):
         if idx >= len(self.ids):
             raise IndexError(f"인덱스 {idx}가 데이터셋 크기({len(self.ids)})를 초과했습니다.")
