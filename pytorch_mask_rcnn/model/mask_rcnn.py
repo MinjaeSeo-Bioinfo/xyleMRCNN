@@ -1,11 +1,12 @@
 from collections import OrderedDict
 
+import torch  #@
 import torch.nn.functional as F
 from torch import nn
 from torch.utils.model_zoo import load_url
 from torchvision import models
 from torchvision.ops import misc
-
+from .SENet import SEResBackbone
 from .utils import AnchorGenerator
 from .rpn import RPNHead, RegionProposalNetwork
 from .pooler import RoIAlign
@@ -93,7 +94,9 @@ class MaskRCNN(nn.Module):
                  # 원래 (10, 10, 5, 5)에서 증가
                  box_reg_weights=(15., 15., 7.5, 7.5),
                  #@@@@@@@@@@@@ box_nms_thresh 0.6 to 0.5
-                 box_score_thresh=0.1, box_nms_thresh=0.5, box_num_detections=100):
+                 box_score_thresh=0.1, box_nms_thresh=0.5, box_num_detections=100,
+                 # 경계 가중치 매개변수 추가
+                 boundary_weight=2.0):
         super().__init__()
         self.backbone = backbone
         out_channels = backbone.out_channels
@@ -113,7 +116,6 @@ class MaskRCNN(nn.Module):
              rpn_num_samples, rpn_positive_fraction,
              rpn_reg_weights,
              rpn_pre_nms_top_n, rpn_post_nms_top_n, rpn_nms_thresh)
-        
         #------------ RoIHeads --------------------------
         box_roi_pool = RoIAlign(output_size=(7, 7), sampling_ratio=2)
         
@@ -122,19 +124,23 @@ class MaskRCNN(nn.Module):
         mid_channels = 1024
         box_predictor = FastRCNNPredictor(in_channels, mid_channels, num_classes)
         
+        # boundary_weight 매개변수 전달
         self.head = RoIHeads(
              box_roi_pool, box_predictor,
              box_fg_iou_thresh, box_bg_iou_thresh,
              box_num_samples, box_positive_fraction,
              box_reg_weights,
-             box_score_thresh, box_nms_thresh, box_num_detections)
+             box_score_thresh, box_nms_thresh, box_num_detections,
+             boundary_weight=boundary_weight)  # 경계 가중치 추가
         
         self.head.mask_roi_pool = RoIAlign(output_size=(14, 14), sampling_ratio=2)
         
         layers = (256, 256, 256, 256)
         dim_reduced = 256
-        self.head.mask_predictor = MaskRCNNPredictor(out_channels, layers, dim_reduced, num_classes)
-        
+        #@@@@@@@@@ self.head.mask_predictor = MaskRCNNPredictor(out_channels, layers, dim_reduced, num_classes)
+        self.head.mask_predictor = EnhancedMaskRCNNPredictor(
+            out_channels, layers, dim_reduced, num_classes
+            )
         #------------ Transformer --------------------------
         self.transformer = Transformer(
             min_size=800, max_size=1333, 
@@ -202,7 +208,65 @@ class MaskRCNNPredictor(nn.Sequential):
             if 'weight' in name:
                 nn.init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
                 
+#@@@@@@@@@ add skip connection
+class EnhancedMaskRCNNPredictor(nn.Module):
+    def __init__(self, in_channels, layers, dim_reduced, num_classes):
+        super().__init__()
+        
+        # 초기 컨볼루션 레이어들
+        self.initial_convs = nn.ModuleList()
+        next_feature = in_channels
+        for layer_idx, layer_features in enumerate(layers, 1):
+            conv = nn.Sequential(
+                nn.Conv2d(next_feature, layer_features, 3, 1, 1),
+                nn.BatchNorm2d(layer_features),
+                nn.ReLU(inplace=True)
+            )
+            self.initial_convs.append(conv)
+            next_feature = layer_features
+        
+        # Skip connection을 위한 1x1 컨볼루션
+        self.skip_convs = nn.ModuleList([
+            nn.Conv2d(layer_features, dim_reduced, 1) for layer_features in layers
+        ])
+        
+        # 업샘플링 및 특징 통합
+        self.upsample_conv = nn.ConvTranspose2d(next_feature, dim_reduced, 2, 2, 0)
+        self.final_relu = nn.ReLU(inplace=True)
+        
+        # 최종 분류 레이어
+        self.mask_logits = nn.Conv2d(dim_reduced * 2, num_classes, 1, 1, 0)
     
+    def forward(self, x):
+        # 중간 특징 저장을 위한 리스트
+        intermediate_features = []
+        
+        # 각 레이어 통과 및 특징 추출
+        for conv, skip_conv in zip(self.initial_convs, self.skip_convs):
+            x = conv(x)
+            intermediate_feature = skip_conv(x)
+            intermediate_features.append(intermediate_feature)
+        
+        # 최종 업샘플링
+        x = self.upsample_conv(x)
+        x = self.final_relu(x)
+        
+        # Skip connection 통합
+        # 마지막 중간 특징 크기 조정 (필요한 경우)
+        skip_feature = intermediate_features[-1]
+        
+        # 크기가 맞지 않을 경우 보간으로 크기 맞추기
+        if skip_feature.shape[2:] != x.shape[2:]:
+            skip_feature = F.interpolate(skip_feature, size=x.shape[2:], mode='bilinear', align_corners=False)
+        
+        # 특징 맵 연결
+        x = torch.cat([x, skip_feature], dim=1)
+        
+        # 최종 마스크 로짓 생성
+        mask_logits = self.mask_logits(x)
+        
+        return mask_logits
+  
 class ResBackbone(nn.Module):
     def __init__(self, backbone_name, pretrained):
         super().__init__()
@@ -233,42 +297,113 @@ class ResBackbone(nn.Module):
         return x
 
     
-def maskrcnn_resnet50(pretrained, num_classes, pretrained_backbone=True):
+# def maskrcnn_resnet50(pretrained, num_classes, pretrained_backbone=True, boundary_weight=2.0):
+#     """
+#     Constructs a Mask R-CNN model with a ResNet-50 backbone.
+    
+#     Arguments:
+#         pretrained (bool): If True, returns a model pre-trained on COCO train2017.
+#         num_classes (int): number of classes (including the background).
+#         pretrained_backbone (bool): If True, use pretrained backbone weights.
+#         boundary_weight (float): Weight factor for boundary pixels in mask loss.
+#     """
+    
+#     if pretrained:
+#         backbone_pretrained = False
+        
+#     backbone = ResBackbone('resnet50', pretrained_backbone)
+#     model = MaskRCNN(backbone, num_classes, boundary_weight=boundary_weight)
+    
+#     if pretrained:
+#         model_urls = {
+#             'maskrcnn_resnet50_fpn_coco':
+#                 'https://download.pytorch.org/models/maskrcnn_resnet50_fpn_coco-bf2d0c1e.pth',
+#         }
+#         model_state_dict = load_url(model_urls['maskrcnn_resnet50_fpn_coco'])
+        
+#         pretrained_msd = list(model_state_dict.values())
+#         del_list = [i for i in range(265, 271)] + [i for i in range(273, 279)]
+#         for i, del_idx in enumerate(del_list):
+#             pretrained_msd.pop(del_idx - i)
+
+#         msd = model.state_dict()
+#         skip_list = [271, 272, 273, 274, 279, 280, 281, 282, 293, 294]
+#         if num_classes == 91:
+#             skip_list = [271, 272, 273, 274]
+#         for i, name in enumerate(msd):
+#             if i in skip_list:
+#                 continue
+#             msd[name].copy_(pretrained_msd[i])
+            
+#         model.load_state_dict(msd)
+    
+#     return model
+
+def maskrcnn_se_resnet50(pretrained, num_classes, pretrained_backbone=True, boundary_weight=2.0):
     """
-    Constructs a Mask R-CNN model with a ResNet-50 backbone.
+    SE 블록과 Depthwise Separable Convolution을 활용한 ResNet-50 백본을 갖는 Mask R-CNN 모델을 생성합니다.
     
     Arguments:
-        pretrained (bool): If True, returns a model pre-trained on COCO train2017.
-        num_classes (int): number of classes (including the background).
+        pretrained (bool): COCO에서 사전 훈련된 가중치를 사용할지 여부.
+        num_classes (int): 클래스 수(배경 포함).
+        pretrained_backbone (bool): 백본에 사전 훈련된 가중치를 사용할지 여부.
+        boundary_weight (float): 마스크 손실에서 경계 픽셀의 가중치.
     """
+    # SE-ResNet 백본 생성
+    backbone = SEResBackbone('resnet50', pretrained=False)  # 우선 사전 훈련 없이 생성
+    
+    # Mask R-CNN 모델 생성
+    model = MaskRCNN(backbone, num_classes, boundary_weight=boundary_weight)
     
     if pretrained:
-        backbone_pretrained = False
-        
-    backbone = ResBackbone('resnet50', pretrained_backbone)
-    model = MaskRCNN(backbone, num_classes)
-    
-    if pretrained:
+        print("COCO 사전 훈련 가중치 로드 중...")
+        # COCO 사전 훈련 가중치 로드
         model_urls = {
             'maskrcnn_resnet50_fpn_coco':
                 'https://download.pytorch.org/models/maskrcnn_resnet50_fpn_coco-bf2d0c1e.pth',
         }
-        model_state_dict = load_url(model_urls['maskrcnn_resnet50_fpn_coco'])
         
-        pretrained_msd = list(model_state_dict.values())
-        del_list = [i for i in range(265, 271)] + [i for i in range(273, 279)]
-        for i, del_idx in enumerate(del_list):
-            pretrained_msd.pop(del_idx - i)
-
-        msd = model.state_dict()
-        skip_list = [271, 272, 273, 274, 279, 280, 281, 282, 293, 294]
-        if num_classes == 91:
-            skip_list = [271, 272, 273, 274]
-        for i, name in enumerate(msd):
-            if i in skip_list:
-                continue
-            msd[name].copy_(pretrained_msd[i])
-            
-        model.load_state_dict(msd)
+        # COCO 가중치 다운로드
+        coco_state_dict = load_url(model_urls['maskrcnn_resnet50_fpn_coco'])
+        
+        # 현재 모델의 state_dict
+        model_state_dict = model.state_dict()
+        
+        # 백본의 ResNet 부분에만 가중치 로드하기 위한 사전 작업
+        pretrained_backbone_dict = {}
+        se_layers = []  # SE 블록 레이어 이름들
+        
+        # 백본의 ResNet 부분과 SE 블록 부분 구분
+        for name, _ in model_state_dict.items():
+            # SE 블록 및 Depthwise 레이어는 제외
+            if 'se_block' in name or 'depthwise' in name or 'pointwise' in name:
+                se_layers.append(name)
+        
+        # COCO 가중치와 현재 모델 state_dict 매핑
+        for name, param in model_state_dict.items():
+            # 백본의 원래 ResNet 부분에만 COCO 가중치 적용
+            if name in coco_state_dict and name not in se_layers:
+                # 크기가 맞는 경우에만 가중치 복사
+                if param.shape == coco_state_dict[name].shape:
+                    pretrained_backbone_dict[name] = coco_state_dict[name]
+                    print(f"로드됨: {name}")
+                else:
+                    print(f"크기 불일치로 건너뜀: {name}")
+        
+        # SE 블록 및 Depthwise 부분 외 나머지 가중치 로드
+        # 주로 RPN, RoI Heads 등에 해당
+        for name, param in coco_state_dict.items():
+            # 백본 부분이 아니면서 현재 모델에 존재하는 레이어
+            if 'backbone' not in name and name in model_state_dict:
+                if param.shape == model_state_dict[name].shape:
+                    pretrained_backbone_dict[name] = param
+                    print(f"로드됨(백본 외): {name}")
+                else:
+                    print(f"크기 불일치로 건너뜀(백본 외): {name}")
+        
+        # 필터링된 가중치 로드
+        # strict=False로 설정하여 SE 블록 및 불일치하는 레이어는 무시
+        model.load_state_dict(pretrained_backbone_dict, strict=False)
+        print(f"총 {len(pretrained_backbone_dict)}/{len(model_state_dict)} 레이어의 가중치가 로드되었습니다.")
     
     return model
