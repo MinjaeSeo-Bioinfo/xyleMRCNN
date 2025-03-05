@@ -44,7 +44,9 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, args):
         optimizer.zero_grad()
 
         if num_iters % args.print_freq == 0 or True:
-            print("{}\t".format(num_iters), "\t".join("{:.3f}".format(l.item()) for l in losses.values()))
+            # 경계 가중치 출력 추가
+            boundary_weight = model.head.boundary_weight if hasattr(model.head, 'boundary_weight') else "N/A"
+            print("{}\t".format(num_iters), "\t".join("{:.3f}".format(l.item()) for l in losses.values()), f"\tBoundary Weight: {boundary_weight}")
 
         t_m.update(time.time() - T)
         if i >= iters - 1:
