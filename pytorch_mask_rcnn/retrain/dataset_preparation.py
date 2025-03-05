@@ -59,6 +59,9 @@ class PredictionReviewer:
         self.current_img_idx = 0
         self.current_ann_idx = 0
         
+        # 첫 번째 이미지 ID로 초기화
+        self.current_img_id = self.image_ids[0] if self.image_ids else None
+        
         print(f"총 {len(self.image_ids)}개 이미지의 정보를 로드했습니다.")
         print(f"총 {sum(len(anns) for anns in self.image_annotations.values())}개의 어노테이션이 있습니다.")
         print(f"출력 파일은 {self.output_dir}에 저장됩니다.")
@@ -74,11 +77,12 @@ class PredictionReviewer:
         self.image_dropdown = widgets.Dropdown(
             options=img_options,
             description='이미지:',
-            style={'description_width': 'initial'}
+            style={'description_width': 'initial'},
+            value=self.image_ids[0]  # 첫 번째 이미지를 기본값으로 설정
         )
         self.image_dropdown.observe(self.on_image_change, names='value')
         
-        # 버튼 생성
+        # 버튼 생성 (기존 코드와 동일)
         self.reject_button = widgets.Button(
             description='Reject',
             button_style='danger',
@@ -139,6 +143,14 @@ class PredictionReviewer:
         
         # 출력 영역
         self.output = widgets.Output()
+        
+        # 첫 이미지 로드 및 어노테이션 표시
+        if self.image_ids:
+            # 첫 번째 이미지 강제 로드
+            self.current_img_id = self.image_ids[0]
+            self.current_ann_idx = 0
+            self.load_current_image()
+            self.show_current_annotation()
         
         # 위젯 표시
         display(self.controls)
@@ -453,3 +465,4 @@ def start_prediction_review(images_dir, predictions_json, filename_prefix="annot
     
     reviewer = PredictionReviewer(images_dir, predictions_json, filename_prefix, output_dir)
     return reviewer
+
