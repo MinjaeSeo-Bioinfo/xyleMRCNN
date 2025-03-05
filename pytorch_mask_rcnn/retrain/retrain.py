@@ -339,4 +339,3 @@ if __name__ == "__main__":
         args.results = os.path.join(os.path.dirname(args.ckpt_path), "maskrcnn_rejected_results.pth")
     
     main(args)
-
