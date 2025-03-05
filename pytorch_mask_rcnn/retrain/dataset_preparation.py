@@ -236,19 +236,7 @@ class PredictionReviewer:
                     # 진행 상황 업데이트
                     self.progress.value = self.current_ann_idx
                     
-                    # 이미지 표시 (2x2 레이아웃)
-                    plt.figure(figsize=(15, 10))
-                    
-                    # 전체 이미지
-                    plt.subplot(2, 2, 1)
-                    img_filename = self.image_info[self.current_img_id]['file_name']
-                    plt.title(f"{img_filename} - 어노테이션 {self.current_ann_idx + 1}/{len(current_anns)}")
-                    plt.imshow(img_copy)
-                    plt.axis('off')
-                    
-                    # 확대된 바운딩 박스 영역
-                    plt.subplot(2, 2, 2)
-                    plt.title(f"확대 보기: {label}")
+                    # plt.figure(figsize=(10, 8))
                     
                     # 패딩 추가 (바운딩 박스 주변 영역 포함)
                     padding = max(30, int(max(w, h) * 0.3))
@@ -256,52 +244,16 @@ class PredictionReviewer:
                     crop_y1 = max(0, y1 - padding)
                     crop_x2 = min(img_copy.shape[1], x2 + padding)
                     crop_y2 = min(img_copy.shape[0], y2 + padding)
-                    
+                                        
                     # 확대 영역 자르기
                     zoomed = img_copy[crop_y1:crop_y2, crop_x1:crop_x2]
+                                        
+                    # 이미지 제목 (확대된 어노테이션 정보 포함)
+                    img_filename = self.image_info[self.current_img_id]['file_name']
+                    plt.title(f"{img_filename} - 어노테이션 {self.current_ann_idx + 1}/{len(current_anns)}\n{label}")
+                                        
                     plt.imshow(zoomed)
                     plt.axis('off')
-                    
-                    # 원본 이미지와 다른 모든 어노테이션 표시
-                    full_img_with_all = self.image.copy()
-                    
-                    # 모든 어노테이션 그리기
-                    for i, other_ann in enumerate(current_anns):
-                        other_bbox = other_ann.get('bbox', [])
-                        if len(other_bbox) == 4:
-                            other_x, other_y, other_w, other_h = map(float, other_bbox)
-                            other_x1, other_y1, other_x2, other_y2 = int(other_x), int(other_y), int(other_x + other_w), int(other_y + other_h)
-                            
-                            # 현재 어노테이션 확인
-                            other_ann_id = other_ann.get('id')
-                            is_current = (i == self.current_ann_idx)
-                            is_rejected = other_ann_id in self.rejected_ids
-                            
-                            # 색상 설정: 현재 = 빨강/초록, 다른 것 = 파랑
-                            if is_current:
-                                box_color = (255, 0, 0) if is_rejected else (0, 255, 0)
-                                thickness = 3
-                            else:
-                                box_color = (0, 0, 255) if is_rejected else (100, 100, 255)
-                                thickness = 1
-                                
-                            cv2.rectangle(full_img_with_all, (other_x1, other_y1), (other_x2, other_y2), box_color, thickness)
-                    
-                    plt.subplot(2, 2, 3)
-                    plt.title("모든 어노테이션")
-                    plt.imshow(full_img_with_all)
-                    plt.axis('off')
-                    
-                    # 현재 어노테이션이 있는 확대된 영역 표시
-                    full_zoomed = self.image.copy()
-                    rect_color = (255, 255, 0)  # 노란색 사각형으로 현재 확대 영역 표시
-                    cv2.rectangle(full_zoomed, (crop_x1, crop_y1), (crop_x2, crop_y2), rect_color, 2)
-                    
-                    plt.subplot(2, 2, 4)
-                    plt.title("확대 영역")
-                    plt.imshow(full_zoomed)
-                    plt.axis('off')
-                    
                     plt.tight_layout()
                     plt.show()
                 else:
@@ -501,4 +453,3 @@ def start_prediction_review(images_dir, predictions_json, filename_prefix="annot
     
     reviewer = PredictionReviewer(images_dir, predictions_json, filename_prefix, output_dir)
     return reviewer
-
