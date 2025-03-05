@@ -29,12 +29,7 @@ class XylemDataset(GeneralizedDataset):
         img_ids = sorted([int(img_id) for img_id in self.coco.getImgIds()])
         print(f"이미지 ID 범위: {min(img_ids)}부터 {max(img_ids)}까지, 총 {len(img_ids)}개")
         self.ids = img_ids  # 명확하게 정수 리스트로 저장
-        
-        # ID 타입 확인
-        if len(self.ids) > 0:
-            print(f"self.ids의 첫 번째 ID 타입: {type(self.ids[0])}")
-            print(f"self.ids의 첫 번째 값: {self.ids[0]}")
-        
+
         # 유효한 ID 범위 확인
         coco_img_ids = set(self.coco.imgs.keys())
         print(f"COCO 이미지 ID 범위: {min(coco_img_ids)}부터 {max(coco_img_ids)}까지")
@@ -52,24 +47,10 @@ class XylemDataset(GeneralizedDataset):
         
         # check_dataset에서 self.ids가 문자열로 변경되었을 수 있으므로 다시 정수로 변환
         self.ids = [int(id) for id in self.ids]
-        
-        # 확인 출력
-        if len(self.ids) > 0:
-            print(f"check_dataset 이후 self.ids의 첫 번째 ID 타입: {type(self.ids[0])}")
-            print(f"check_dataset 이후 self.ids의 첫 번째 값: {self.ids[0]}")
                 
         # 카테고리 매핑 생성
         cats = list(self.coco.cats.values())
         self.cat_ids = {cat['id']: i+1 for i, cat in enumerate(cats)}
-
-        # 카테고리 정보 출력
-        print("Categories:")
-        for cat in cats:
-            print(f"- {cat['name']} (ID: {cat['id']})")
-        
-        # debugging !
-        print(f"self.ids의 첫 번째 ID 타입: {type(self.ids[0])}")
-        print(f"self.coco.imgs의 첫 번째 키 타입: {type(next(iter(self.coco.imgs.keys())))}")
             
     def get_image(self, img_id):
         # 이미지 ID 타입 확인 및 변환
@@ -81,7 +62,6 @@ class XylemDataset(GeneralizedDataset):
             raise KeyError(f"이미지 ID {img_id}가 데이터셋에 존재하지 않습니다. 유효한 ID 범위: {min(self.ids)}~{max(self.ids)}")
         
         img_info = self.coco.imgs[img_id]
-        # 여기를 수정 - self.img_dir 경로 사용
         image_path = os.path.join(self.img_dir, img_info["file_name"])
         
         # 파일 존재 여부 확인
@@ -166,9 +146,7 @@ class XylemDataset(GeneralizedDataset):
             img_id = int(self.ids[idx])
         else:
             img_id = self.ids[idx]
-        
-        print(f"인덱스 {idx}에 대한 이미지 ID: {img_id}, 타입: {type(img_id)}")
-        
+
         image = self.get_image(img_id)
         target = self.get_target(img_id)
         image = F.to_tensor(image)
@@ -182,3 +160,4 @@ class XylemDataset(GeneralizedDataset):
     def convert_to_coco_api(ds):
         """Convert to COCO API format"""
         return ds.coco
+
