@@ -20,7 +20,58 @@ def fastrcnn_loss(class_logit, box_regression, label, regression_target):
     return classifier_loss, box_reg_loss
 
 
-def maskrcnn_loss(mask_logit, proposal, matched_idx, label, gt_mask):
+def boundary_sensitive_loss(mask_logit, mask_target, boundary_weight=2.0):
+    """
+    Compute boundary-sensitive loss for mask prediction.
+    
+    Args:
+        mask_logit: The predicted mask logits
+        mask_target: The ground truth mask
+        boundary_weight: Weight to apply to boundary pixels
+    
+    Returns:
+        Weighted binary cross entropy loss
+    """
+    # Create boundary mask
+    # Dilate and erode to find boundaries
+    kernel_size = 3
+    mask_float = mask_target.float()
+    
+    # Use max_pool2d for dilation
+    dilated = torch.nn.functional.max_pool2d(
+        mask_float, 
+        kernel_size=kernel_size, 
+        stride=1, 
+        padding=kernel_size//2
+    )
+    # Use max_pool2d on inverted mask for erosion
+    eroded = 1.0 - torch.nn.functional.max_pool2d(
+        1.0 - mask_float,
+        kernel_size=kernel_size,
+        stride=1,
+        padding=kernel_size//2
+    )
+    # Boundary is the difference between dilated and eroded
+    boundary_mask = (dilated - eroded).clamp(0, 1)
+    
+    # Create weight map giving higher weight to boundary pixels
+    weights = torch.ones_like(mask_target, dtype=torch.float)
+    weights = weights + boundary_mask * (boundary_weight - 1)
+    
+    # Apply weighted binary cross entropy
+    loss = torch.nn.functional.binary_cross_entropy_with_logits(
+        mask_logit, 
+        mask_target.float(), 
+        weight=weights,
+        reduction='mean'
+    )
+    return loss
+
+# modify the existing maskrcnn_loss function
+def maskrcnn_loss(mask_logit, proposal, matched_idx, label, gt_mask, boundary_weight=2.0):
+    """
+    Compute the mask prediction loss with boundary sensitivity.
+    """
     matched_idx = matched_idx[:, None].to(proposal)
     roi = torch.cat((matched_idx, proposal), dim=1)
             
@@ -29,8 +80,33 @@ def maskrcnn_loss(mask_logit, proposal, matched_idx, label, gt_mask):
     mask_target = roi_align(gt_mask, roi, 1., M, M, -1)[:, 0]
 
     idx = torch.arange(label.shape[0], device=label.device)
-    mask_loss = F.binary_cross_entropy_with_logits(mask_logit[idx, label], mask_target)
+    
+    # Use boundary-sensitive loss instead of standard BCE
+    if boundary_weight > 1.0:
+        mask_loss = boundary_sensitive_loss(
+            mask_logit[idx, label], 
+            mask_target,
+            boundary_weight=boundary_weight
+        )
+    else:
+        # Fall back to original loss if boundary weight is not enabled
+        mask_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+            mask_logit[idx, label], 
+            mask_target
+        )
     return mask_loss
+
+# def maskrcnn_loss(mask_logit, proposal, matched_idx, label, gt_mask):
+#     matched_idx = matched_idx[:, None].to(proposal)
+#     roi = torch.cat((matched_idx, proposal), dim=1)
+            
+#     M = mask_logit.shape[-1]
+#     gt_mask = gt_mask[:, None].to(roi)
+#     mask_target = roi_align(gt_mask, roi, 1., M, M, -1)[:, 0]
+
+#     idx = torch.arange(label.shape[0], device=label.device)
+#     mask_loss = F.binary_cross_entropy_with_logits(mask_logit[idx, label], mask_target)
+#     return mask_loss
     
 
 class RoIHeads(nn.Module):
@@ -38,7 +114,8 @@ class RoIHeads(nn.Module):
                  fg_iou_thresh, bg_iou_thresh,
                  num_samples, positive_fraction,
                  reg_weights,
-                 score_thresh, nms_thresh, num_detections):
+                 score_thresh, nms_thresh, num_detections,
+                 boundary_weight=2.0):  #@@@ Add boundary_weight parameter
         super().__init__()
         self.box_roi_pool = box_roi_pool
         self.box_predictor = box_predictor
@@ -54,7 +131,7 @@ class RoIHeads(nn.Module):
         self.nms_thresh = nms_thresh
         self.num_detections = num_detections
         self.min_size = 1
-        
+        self.boundary_weight = boundary_weight
     def has_mask(self):
         if self.mask_roi_pool is None:
             return False
@@ -128,20 +205,14 @@ class RoIHeads(nn.Module):
         if self.has_mask():
             if self.training:
                 num_pos = regression_target.shape[0]
+                print(f"양성 샘플 수: {num_pos}")  # 디버깅 출력
                 
                 mask_proposal = proposal[:num_pos]
                 pos_matched_idx = matched_idx[:num_pos]
                 mask_label = label[:num_pos]
                 
-                '''
-                # -------------- critial ----------------
-                box_regression = box_regression[:num_pos].reshape(num_pos, -1, 4)
-                idx = torch.arange(num_pos, device=mask_label.device)
-                mask_proposal = self.box_coder.decode(box_regression[idx, mask_label], mask_proposal)
-                # ---------------------------------------
-                '''
-                
                 if mask_proposal.shape[0] == 0:
+                    print("경고: 양성 샘플이 없어 마스크 손실이 0입니다!")  # 디버깅 출력
                     losses.update(dict(roi_mask_loss=torch.tensor(0)))
                     return result, losses
             else:
@@ -156,7 +227,11 @@ class RoIHeads(nn.Module):
             
             if self.training:
                 gt_mask = target['masks']
-                mask_loss = maskrcnn_loss(mask_logit, mask_proposal, pos_matched_idx, mask_label, gt_mask)
+                # Pass boundary_weight to the loss function
+                mask_loss = maskrcnn_loss(
+                    mask_logit, mask_proposal, pos_matched_idx, 
+                    mask_label, gt_mask, self.boundary_weight
+                )
                 losses.update(dict(roi_mask_loss=mask_loss))
             else:
                 label = result['labels']

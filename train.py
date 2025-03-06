@@ -31,7 +31,7 @@ def main(args):
     # +1 for include background class
     num_classes = max(d_train.dataset.classes) + 1 
     # ResNet-50 backbone Mask R-CNN Model create
-    model = pmr.maskrcnn_resnet50(True, num_classes).to(device)
+    model = pmr.maskrcnn_resnet50(True, num_classes, boundary_weight=args.boundary_weight).to(device)
     
     
     #@@@@@@@@ COCO pretrained weight download @@@@@@@@@@@
@@ -140,8 +140,10 @@ if __name__ == "__main__":
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--aspect-ratio-group-factor", type=int, default=3)
     parser.add_argument("--no-pretrained", action="store_true", help="do not load pretrained weights")
+    #@@ 경계 가중치 매개변수 추가
+    parser.add_argument("--boundary-weight", type=float, default=2.0,
+                       help="Weight factor for boundary pixels in mask loss")
     #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-    
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument('--lr-steps', nargs="+", type=int, default=[6, 7])
     parser.add_argument("--lr", type=float)
@@ -169,4 +171,3 @@ if __name__ == "__main__":
         
     args.results = "/gdrive/MyDrive/HyunsLab/Xylemrcnn/xyleMRCNN/maskrcnn_results.pth"    
     main(args)
-
