@@ -124,64 +124,6 @@ def visualize_prediction(image, boxes, masks, scores, labels, class_names, score
         plt.tight_layout()
         plt.savefig(save_path, dpi=300)
         plt.close()
-        
-        # # 추가로 임계값을 낮춘 결과도 저장
-        # if detected_count == 0:
-        #     print("기본 임계값으로 검출된 객체가 없습니다. 낮은 임계값으로 다시 시도합니다.")
-        #     lower_threshold = 0.1
-        #     base_name = os.path.splitext(save_path)[0]
-        #     lower_save_path = f"{base_name}_lower_threshold{lower_threshold}.png"
-            
-        #     # 임계값을 낮춘 결과 생성
-        #     lower_bbox_result = image.copy()
-        #     lower_mask_result = np.zeros_like(image)
-            
-        #     lower_detected_count = 0
-        #     for i, (box, score) in enumerate(zip(boxes, scores)):
-        #         if score < lower_threshold:
-        #             continue
-                
-        #         lower_detected_count += 1
-                
-        #         # 바운딩 박스 그리기
-        #         x1, y1, x2, y2 = box.astype(int)
-        #         class_id = 0  # Xylem 클래스
-        #         color = colors[class_id]
-        #         cv2.rectangle(lower_bbox_result, (x1, y1), (x2, y2), color, 2)
-        #         caption = f"{class_names[class_id]}: {score:.2f}"
-        #         cv2.putText(lower_bbox_result, caption, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                
-        #         # 마스크 그리기
-        #         if masks is not None and len(masks) > i:
-        #             mask = masks[i]
-        #             lower_mask_result[mask > 0.5] = color
-            
-        #     plt.figure(figsize=(18, 6))
-            
-        #     # 원본 이미지
-        #     plt.subplot(1, 3, 1)
-        #     plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        #     plt.title("Original Image")
-        #     plt.axis('off')
-            
-        #     # 바운딩 박스 결과
-        #     plt.subplot(1, 3, 2)
-        #     plt.imshow(cv2.cvtColor(lower_bbox_result, cv2.COLOR_BGR2RGB))
-        #     plt.title(f"Bounding Box (threshold={lower_threshold})")
-        #     plt.axis('off')
-            
-        #     # 마스크 결과
-        #     plt.subplot(1, 3, 3)
-        #     plt.imshow(cv2.cvtColor(lower_mask_result, cv2.COLOR_BGR2RGB))
-        #     plt.title(f"Mask (threshold={lower_threshold})")
-        #     plt.axis('off')
-            
-        #     plt.tight_layout()
-        #     plt.savefig(lower_save_path)
-        #     plt.close()
-            
-        #     print(f"임계값 {lower_threshold}으로 {lower_detected_count}개 객체 검출, 결과가 {lower_save_path}에 저장되었습니다.")
-    
     return bbox_result, mask_result
 
 def predict_image(model, image_path, device, score_threshold=0.5, save_dir=None):
@@ -404,6 +346,7 @@ def predict_directory_with_json(model, image_dir, device, score_threshold=0.5, s
 def visualize_from_json(json_path, image_dir, output_dir):
     """
     JSON 파일의 어노테이션을 사용하여 원본 이미지에 표시
+    각 bbox에 어노테이션 ID 추가
     """
     # JSON 파일 로드
     with open(json_path, 'r') as f:
@@ -441,6 +384,7 @@ def visualize_from_json(json_path, image_dir, output_dir):
             bbox = ann['bbox']
             x, y, w, h = [int(v) for v in bbox]
             score = ann.get('score', 1.0)
+            ann_id = ann['id']  # 어노테이션 ID 추출
             
             # 분홍색 사용 (Xylem 클래스)
             color = (255, 105, 180)
@@ -448,8 +392,8 @@ def visualize_from_json(json_path, image_dir, output_dir):
             # 바운딩 박스 그리기
             cv2.rectangle(image, (x, y), (x+w, y+h), color, 3)
             
-            # 레이블 텍스트
-            caption = f"xylem: {score:.2f}"
+            # 레이블 텍스트 (어노테이션 ID 포함)
+            caption = f"xylem (ID:{ann_id}): {score:.2f}"
             text_size, _ = cv2.getTextSize(caption, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
             cv2.rectangle(image, (x, y - text_size[1] - 8), (x + text_size[0] + 5, y), color, -1)
             cv2.putText(image, caption, (x + 2, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -535,3 +479,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
