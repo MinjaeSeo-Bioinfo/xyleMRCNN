@@ -1,5 +1,5 @@
 from collections import OrderedDict
-import torch  #@
+import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.utils.model_zoo import load_url
@@ -303,102 +303,4 @@ def maskrcnn_se_resnet50(pretrained, num_classes, pretrained_backbone=True, boun
         print(f"총 {len(pretrained_backbone_dict)}/{len(model_state_dict)} 레이어의 가중치가 로드되었습니다.")
     
     return model
-    
-    #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# class MaskRCNNPredictor(nn.Sequential):
-#     def __init__(self, in_channels, layers, dim_reduced, num_classes):
-#         """
-#         Arguments:
-#             in_channels (int)
-#             layers (Tuple[int])
-#             dim_reduced (int)
-#             num_classes (int)
-#         """
-        
-#         d = OrderedDict()
-#         next_feature = in_channels
-#         for layer_idx, layer_features in enumerate(layers, 1):
-#             d['mask_fcn{}'.format(layer_idx)] = nn.Conv2d(next_feature, layer_features, 3, 1, 1)
-#             d['relu{}'.format(layer_idx)] = nn.ReLU(inplace=True)
-#             next_feature = layer_features
-        
-#         d['mask_conv5'] = nn.ConvTranspose2d(next_feature, dim_reduced, 2, 2, 0)
-#         d['relu5'] = nn.ReLU(inplace=True)
-#         d['mask_fcn_logits'] = nn.Conv2d(dim_reduced, num_classes, 1, 1, 0)
-#         super().__init__(d)
 
-#         for name, param in self.named_parameters():
-#             if 'weight' in name:
-#                 nn.init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
-                
-    
-# def maskrcnn_resnet50(pretrained, num_classes, pretrained_backbone=True, boundary_weight=2.0):
-#     """
-#     Constructs a Mask R-CNN model with a ResNet-50 backbone.
-    
-#     Arguments:
-#         pretrained (bool): If True, returns a model pre-trained on COCO train2017.
-#         num_classes (int): number of classes (including the background).
-#         pretrained_backbone (bool): If True, use pretrained backbone weights.
-#         boundary_weight (float): Weight factor for boundary pixels in mask loss.
-#     """
-    
-#     if pretrained:
-#         backbone_pretrained = False
-        
-#     backbone = ResBackbone('resnet50', pretrained_backbone)
-#     model = MaskRCNN(backbone, num_classes, boundary_weight=boundary_weight)
-    
-#     if pretrained:
-#         model_urls = {
-#             'maskrcnn_resnet50_fpn_coco':
-#                 'https://download.pytorch.org/models/maskrcnn_resnet50_fpn_coco-bf2d0c1e.pth',
-#         }
-#         model_state_dict = load_url(model_urls['maskrcnn_resnet50_fpn_coco'])
-        
-#         pretrained_msd = list(model_state_dict.values())
-#         del_list = [i for i in range(265, 271)] + [i for i in range(273, 279)]
-#         for i, del_idx in enumerate(del_list):
-#             pretrained_msd.pop(del_idx - i)
-
-#         msd = model.state_dict()
-#         skip_list = [271, 272, 273, 274, 279, 280, 281, 282, 293, 294]
-#         if num_classes == 91:
-#             skip_list = [271, 272, 273, 274]
-#         for i, name in enumerate(msd):
-#             if i in skip_list:
-#                 continue
-#             msd[name].copy_(pretrained_msd[i])
-            
-#         model.load_state_dict(msd)
-    
-#     return model
-
-# class ResBackbone(nn.Module):
-#     def __init__(self, backbone_name, pretrained):
-#         super().__init__()
-#         body = models.resnet.__dict__[backbone_name](
-#             pretrained=pretrained, norm_layer=misc.FrozenBatchNorm2d)
-        
-#         for name, parameter in body.named_parameters():
-#             if 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
-#                 parameter.requires_grad_(False)
-                
-#         self.body = nn.ModuleDict(d for i, d in enumerate(body.named_children()) if i < 8)
-#         in_channels = 2048
-#         self.out_channels = 256
-        
-#         self.inner_block_module = nn.Conv2d(in_channels, self.out_channels, 1)
-#         self.layer_block_module = nn.Conv2d(self.out_channels, self.out_channels, 3, 1, 1)
-        
-#         for m in self.children():
-#             if isinstance(m, nn.Conv2d):
-#                 nn.init.kaiming_uniform_(m.weight, a=1)
-#                 nn.init.constant_(m.bias, 0)
-        
-#     def forward(self, x):
-#         for module in self.body.values():
-#             x = module(x)
-#         x = self.inner_block_module(x)
-#         x = self.layer_block_module(x)
-#         return x
