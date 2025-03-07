@@ -1,5 +1,4 @@
 from collections import OrderedDict
-
 import torch  #@
 import torch.nn.functional as F
 from torch import nn
@@ -12,7 +11,6 @@ from .rpn import RPNHead, RegionProposalNetwork
 from .pooler import RoIAlign
 from .roi_heads import RoIHeads
 from .transform import Transformer
-
 
 class MaskRCNN(nn.Module):
     """
@@ -93,8 +91,8 @@ class MaskRCNN(nn.Module):
                  box_num_samples=512, box_positive_fraction=0.25,
                  # 원래 (10, 10, 5, 5)에서 증가
                  box_reg_weights=(15., 15., 7.5, 7.5),
-                 #@@@@@@@@@@@@ box_nms_thresh 0.6 to 0.5
-                 box_score_thresh=0.1, box_nms_thresh=0.5, box_num_detections=100,
+                 #@@@@@@@@@@@@ box_nms_thresh 0.6 to 0.5 , num_detections 200 to 100
+                 box_score_thresh=0.1, box_nms_thresh=0.5, box_num_detections=200,
                  # 경계 가중치 매개변수 추가
                  boundary_weight=2.0):
         super().__init__()
@@ -180,33 +178,6 @@ class FastRCNNPredictor(nn.Module):
         bbox_delta = self.bbox_pred(x)
 
         return score, bbox_delta        
-    
-    
-class MaskRCNNPredictor(nn.Sequential):
-    def __init__(self, in_channels, layers, dim_reduced, num_classes):
-        """
-        Arguments:
-            in_channels (int)
-            layers (Tuple[int])
-            dim_reduced (int)
-            num_classes (int)
-        """
-        
-        d = OrderedDict()
-        next_feature = in_channels
-        for layer_idx, layer_features in enumerate(layers, 1):
-            d['mask_fcn{}'.format(layer_idx)] = nn.Conv2d(next_feature, layer_features, 3, 1, 1)
-            d['relu{}'.format(layer_idx)] = nn.ReLU(inplace=True)
-            next_feature = layer_features
-        
-        d['mask_conv5'] = nn.ConvTranspose2d(next_feature, dim_reduced, 2, 2, 0)
-        d['relu5'] = nn.ReLU(inplace=True)
-        d['mask_fcn_logits'] = nn.Conv2d(dim_reduced, num_classes, 1, 1, 0)
-        super().__init__(d)
-
-        for name, param in self.named_parameters():
-            if 'weight' in name:
-                nn.init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
                 
 #@@@@@@@@@ add skip connection
 class EnhancedMaskRCNNPredictor(nn.Module):
@@ -266,36 +237,100 @@ class EnhancedMaskRCNNPredictor(nn.Module):
         mask_logits = self.mask_logits(x)
         
         return mask_logits
-  
-class ResBackbone(nn.Module):
-    def __init__(self, backbone_name, pretrained):
-        super().__init__()
-        body = models.resnet.__dict__[backbone_name](
-            pretrained=pretrained, norm_layer=misc.FrozenBatchNorm2d)
-        
-        for name, parameter in body.named_parameters():
-            if 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
-                parameter.requires_grad_(False)
-                
-        self.body = nn.ModuleDict(d for i, d in enumerate(body.named_children()) if i < 8)
-        in_channels = 2048
-        self.out_channels = 256
-        
-        self.inner_block_module = nn.Conv2d(in_channels, self.out_channels, 1)
-        self.layer_block_module = nn.Conv2d(self.out_channels, self.out_channels, 3, 1, 1)
-        
-        for m in self.children():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_uniform_(m.weight, a=1)
-                nn.init.constant_(m.bias, 0)
-        
-    def forward(self, x):
-        for module in self.body.values():
-            x = module(x)
-        x = self.inner_block_module(x)
-        x = self.layer_block_module(x)
-        return x
 
+
+def maskrcnn_se_resnet50(pretrained, num_classes, pretrained_backbone=True, boundary_weight=2.0):
+    """
+    SE 블록과 Depthwise Separable Convolution을 활용한 ResNet-50 백본을 갖는 Mask R-CNN 모델을 생성합니다.
+    
+    Arguments:
+        pretrained (bool): COCO에서 사전 훈련된 가중치를 사용할지 여부.
+        num_classes (int): 클래스 수(배경 포함).
+        pretrained_backbone (bool): 백본에 사전 훈련된 가중치를 사용할지 여부.
+        boundary_weight (float): 마스크 손실에서 경계 픽셀의 가중치.
+    """
+    # SE-ResNet 백본 생성
+    backbone = SEResBackbone('resnet50', pretrained=False)
+    model = MaskRCNN(backbone, num_classes, boundary_weight=boundary_weight)
+    
+    if pretrained:
+        print("COCO 사전 훈련 가중치 로드 중...")
+        # COCO 사전 훈련 가중치 로드
+        model_urls = {
+            'maskrcnn_resnet50_fpn_coco':
+                'https://download.pytorch.org/models/maskrcnn_resnet50_fpn_coco-bf2d0c1e.pth',
+        }
+        
+        # COCO 가중치 다운로드
+        coco_state_dict = load_url(model_urls['maskrcnn_resnet50_fpn_coco'])
+        
+        # 현재 모델의 state_dict
+        model_state_dict = model.state_dict()
+        
+        # 백본의 ResNet 부분에만 가중치 로드하기 위한 사전 작업
+        pretrained_backbone_dict = {}
+        se_layers = []
+        
+        # 백본의 ResNet 부분과 SE 블록 부분 구분
+        for name, _ in model_state_dict.items():
+            # SE 블록 및 Depthwise 레이어는 제외
+            if 'se_block' in name or 'depthwise' in name or 'pointwise' in name:
+                se_layers.append(name)
+        
+        # COCO 가중치와 현재 모델 state_dict 매핑
+        for name, param in model_state_dict.items():
+            # 백본의 원래 ResNet 부분에만 COCO 가중치 적용
+            if name in coco_state_dict and name not in se_layers:
+                # 크기가 맞는 경우에만 가중치 복사
+                if param.shape == coco_state_dict[name].shape:
+                    pretrained_backbone_dict[name] = coco_state_dict[name]
+                    print(f"로드됨: {name}")
+                else:
+                    print(f"크기 불일치로 건너뜀: {name}")
+        
+        # SE 블록 및 Depthwise 부분 외 나머지 가중치 로드
+        for name, param in coco_state_dict.items():
+            # 백본 부분이 아니면서 현재 모델에 존재하는 레이어
+            if 'backbone' not in name and name in model_state_dict:
+                if param.shape == model_state_dict[name].shape:
+                    pretrained_backbone_dict[name] = param
+                    print(f"로드됨(백본 외): {name}")
+                else:
+                    print(f"크기 불일치로 건너뜀(백본 외): {name}")
+        
+        # strict=False로 설정하여 SE 블록 및 불일치하는 레이어는 무시
+        model.load_state_dict(pretrained_backbone_dict, strict=False)
+        print(f"총 {len(pretrained_backbone_dict)}/{len(model_state_dict)} 레이어의 가중치가 로드되었습니다.")
+    
+    return model
+    
+    #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# class MaskRCNNPredictor(nn.Sequential):
+#     def __init__(self, in_channels, layers, dim_reduced, num_classes):
+#         """
+#         Arguments:
+#             in_channels (int)
+#             layers (Tuple[int])
+#             dim_reduced (int)
+#             num_classes (int)
+#         """
+        
+#         d = OrderedDict()
+#         next_feature = in_channels
+#         for layer_idx, layer_features in enumerate(layers, 1):
+#             d['mask_fcn{}'.format(layer_idx)] = nn.Conv2d(next_feature, layer_features, 3, 1, 1)
+#             d['relu{}'.format(layer_idx)] = nn.ReLU(inplace=True)
+#             next_feature = layer_features
+        
+#         d['mask_conv5'] = nn.ConvTranspose2d(next_feature, dim_reduced, 2, 2, 0)
+#         d['relu5'] = nn.ReLU(inplace=True)
+#         d['mask_fcn_logits'] = nn.Conv2d(dim_reduced, num_classes, 1, 1, 0)
+#         super().__init__(d)
+
+#         for name, param in self.named_parameters():
+#             if 'weight' in name:
+#                 nn.init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
+                
     
 # def maskrcnn_resnet50(pretrained, num_classes, pretrained_backbone=True, boundary_weight=2.0):
 #     """
@@ -339,71 +374,31 @@ class ResBackbone(nn.Module):
     
 #     return model
 
-def maskrcnn_se_resnet50(pretrained, num_classes, pretrained_backbone=True, boundary_weight=2.0):
-    """
-    SE 블록과 Depthwise Separable Convolution을 활용한 ResNet-50 백본을 갖는 Mask R-CNN 모델을 생성합니다.
-    
-    Arguments:
-        pretrained (bool): COCO에서 사전 훈련된 가중치를 사용할지 여부.
-        num_classes (int): 클래스 수(배경 포함).
-        pretrained_backbone (bool): 백본에 사전 훈련된 가중치를 사용할지 여부.
-        boundary_weight (float): 마스크 손실에서 경계 픽셀의 가중치.
-    """
-    # SE-ResNet 백본 생성
-    backbone = SEResBackbone('resnet50', pretrained=False)  # 우선 사전 훈련 없이 생성
-    
-    # Mask R-CNN 모델 생성
-    model = MaskRCNN(backbone, num_classes, boundary_weight=boundary_weight)
-    
-    if pretrained:
-        print("COCO 사전 훈련 가중치 로드 중...")
-        # COCO 사전 훈련 가중치 로드
-        model_urls = {
-            'maskrcnn_resnet50_fpn_coco':
-                'https://download.pytorch.org/models/maskrcnn_resnet50_fpn_coco-bf2d0c1e.pth',
-        }
+# class ResBackbone(nn.Module):
+#     def __init__(self, backbone_name, pretrained):
+#         super().__init__()
+#         body = models.resnet.__dict__[backbone_name](
+#             pretrained=pretrained, norm_layer=misc.FrozenBatchNorm2d)
         
-        # COCO 가중치 다운로드
-        coco_state_dict = load_url(model_urls['maskrcnn_resnet50_fpn_coco'])
+#         for name, parameter in body.named_parameters():
+#             if 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
+#                 parameter.requires_grad_(False)
+                
+#         self.body = nn.ModuleDict(d for i, d in enumerate(body.named_children()) if i < 8)
+#         in_channels = 2048
+#         self.out_channels = 256
         
-        # 현재 모델의 state_dict
-        model_state_dict = model.state_dict()
+#         self.inner_block_module = nn.Conv2d(in_channels, self.out_channels, 1)
+#         self.layer_block_module = nn.Conv2d(self.out_channels, self.out_channels, 3, 1, 1)
         
-        # 백본의 ResNet 부분에만 가중치 로드하기 위한 사전 작업
-        pretrained_backbone_dict = {}
-        se_layers = []  # SE 블록 레이어 이름들
+#         for m in self.children():
+#             if isinstance(m, nn.Conv2d):
+#                 nn.init.kaiming_uniform_(m.weight, a=1)
+#                 nn.init.constant_(m.bias, 0)
         
-        # 백본의 ResNet 부분과 SE 블록 부분 구분
-        for name, _ in model_state_dict.items():
-            # SE 블록 및 Depthwise 레이어는 제외
-            if 'se_block' in name or 'depthwise' in name or 'pointwise' in name:
-                se_layers.append(name)
-        
-        # COCO 가중치와 현재 모델 state_dict 매핑
-        for name, param in model_state_dict.items():
-            # 백본의 원래 ResNet 부분에만 COCO 가중치 적용
-            if name in coco_state_dict and name not in se_layers:
-                # 크기가 맞는 경우에만 가중치 복사
-                if param.shape == coco_state_dict[name].shape:
-                    pretrained_backbone_dict[name] = coco_state_dict[name]
-                    print(f"로드됨: {name}")
-                else:
-                    print(f"크기 불일치로 건너뜀: {name}")
-        
-        # SE 블록 및 Depthwise 부분 외 나머지 가중치 로드
-        # 주로 RPN, RoI Heads 등에 해당
-        for name, param in coco_state_dict.items():
-            # 백본 부분이 아니면서 현재 모델에 존재하는 레이어
-            if 'backbone' not in name and name in model_state_dict:
-                if param.shape == model_state_dict[name].shape:
-                    pretrained_backbone_dict[name] = param
-                    print(f"로드됨(백본 외): {name}")
-                else:
-                    print(f"크기 불일치로 건너뜀(백본 외): {name}")
-        
-        # 필터링된 가중치 로드
-        # strict=False로 설정하여 SE 블록 및 불일치하는 레이어는 무시
-        model.load_state_dict(pretrained_backbone_dict, strict=False)
-        print(f"총 {len(pretrained_backbone_dict)}/{len(model_state_dict)} 레이어의 가중치가 로드되었습니다.")
-    
-    return model
+#     def forward(self, x):
+#         for module in self.body.values():
+#             x = module(x)
+#         x = self.inner_block_module(x)
+#         x = self.layer_block_module(x)
+#         return x
