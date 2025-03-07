@@ -4,7 +4,7 @@ __all__ = ["datasets", "collate_wrapper"]
 
 def datasets(ds, *args, **kwargs):
     ds = ds.lower()
-    choice = ["xylem"]  # Only Xylem dataset
+    choice = ["xylem"] 
     if ds == choice[0]:
         return XylemDataset(*args, **kwargs)
     else:
@@ -18,10 +18,8 @@ class CustomBatch:
         transposed_data = list(zip(*data))
         self.images = transposed_data[0]
         self.targets = transposed_data[1]
-        
-    # custom memory pinning method on custom type
+
     def pin_memory(self):
         self.images = [img.pin_memory() for img in self.images]
         self.targets = [{k: v.pin_memory() for k, v in tgt.items()} for tgt in self.targets]
         return self
-
