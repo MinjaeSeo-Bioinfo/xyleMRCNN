@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torchvision import models
 from torchvision.ops import misc
 
-# SE 블록 구현
+# SE Block implementation
 class SEBlock(nn.Module):
     def __init__(self, in_channels, r=16):
         super().__init__()
@@ -24,7 +24,7 @@ class SEBlock(nn.Module):
         x = x.view(b, c, 1, 1)
         return x
 
-# 기본 컨볼루션 블록
+# Basic Convolution Block
 class BasicConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, **kwargs):
         super().__init__()
@@ -61,7 +61,7 @@ class Depthwise(nn.Module):
         x = x * se_weight
         return x
 
-# SE-ResNet 백본
+# SE-ResNet Backbone
 class SEResBackbone(nn.Module):
     def __init__(self, backbone_name, pretrained):
         super().__init__()
@@ -76,14 +76,14 @@ class SEResBackbone(nn.Module):
         in_channels = 2048
         self.out_channels = 256
         
-        # SE 블록 추가
+        # Add SE Block
         self.se_block = SEBlock(in_channels)
         
-        # 내부 블록 모듈 및 레이어 블록 모듈
+        # Inner block module and layer block module
         self.inner_block_module = BasicConv2d(in_channels, self.out_channels, kernel_size=1, padding=0)
         self.layer_block_module = Depthwise(self.out_channels, self.out_channels)
         
-        # 가중치 초기화
+        # Weight initialization
         for m in self.children():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_uniform_(m.weight, a=1)
@@ -91,16 +91,15 @@ class SEResBackbone(nn.Module):
                     nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
-        # 백본을 통한 특징 추출
+        # Feature extraction through backbone
         for module in self.body.values():
             x = module(x)
         
-        # SE 블록 적용
+        # Apply SE Block
         se_weight = self.se_block(x)
         x = x * se_weight
         
-        # 추가 처리
+        # Additional processing
         x = self.inner_block_module(x)
         x = self.layer_block_module(x)
         return x
-
