@@ -1,16 +1,13 @@
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 import torch
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from torchvision import transforms
-
 
 class GeneralizedDataset:
     """
     Main class for Generalized Dataset.
     """
-    
     def __init__(self, max_workers=2, verbose=False):
         self.max_workers = max_workers
         self.verbose = verbose
@@ -78,5 +75,3 @@ class GeneralizedDataset:
                 if self.verbose:
                     print(img_id, e)
         return out
-
-                    
