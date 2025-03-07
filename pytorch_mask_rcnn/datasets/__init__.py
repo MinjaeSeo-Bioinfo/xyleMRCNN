@@ -1,11 +1,2 @@
 from .utils import *
-
-try:
-    from .coco_eval import CocoEvaluator, prepare_for_coco
-except ImportError:
-    pass
- 
-try:
-    from .dali import DALICOCODataLoader
-except ImportError:
-    pass
+from .xylem_eval import XylemEvaluator, prepare_for_xylem_coco
