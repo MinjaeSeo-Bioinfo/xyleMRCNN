@@ -8,9 +8,8 @@ import glob
 import matplotlib.pyplot as plt
 import json
 from pycocotools.coco import COCO
-
-# 모델 파일 import
-from pytorch_mask_rcnn.model.mask_rcnn import maskrcnn_resnet50
+import torchvision
+from pytorch_mask_rcnn.model.mask_rcnn import maskrcnn_se_resnet50 as maskrcnn_resnet50
 
 def visualize_prediction(image, boxes, masks, scores, labels, class_names, score_threshold=0.5, save_path=None):
     """
@@ -126,7 +125,7 @@ def visualize_prediction(image, boxes, masks, scores, labels, class_names, score
         plt.close()
     return bbox_result, mask_result
 
-def predict_image(model, image_path, device, score_threshold=0.5, save_dir=None):
+def predict_image(model, image_path, device, score_threshold=0.5, nms_threshold=0.3, save_dir=None):
     """
     단일 이미지에 대한 예측 수행
     """
@@ -173,26 +172,78 @@ def predict_image(model, image_path, device, score_threshold=0.5, save_dir=None)
             if 'boxes' in predictions[0]:
                 print(f"탐지된 객체 수: {len(predictions[0]['boxes'])}")
     
-    # 예측 결과 추출 
+    # 예측 결과 추출 후 NMS 적용
     if isinstance(predictions, dict):
         # 단일 결과 딕셔너리인 경우
-        boxes = predictions['boxes'].cpu().numpy()
-        scores = predictions['scores'].cpu().numpy()
-        labels = predictions['labels'].cpu().numpy()
+        boxes = predictions['boxes'].cpu()
+        scores = predictions['scores'].cpu()
+        labels = predictions['labels'].cpu()
         masks = predictions.get('masks', None)
         if masks is not None:
-            masks = masks.cpu().numpy()
+            masks = masks.cpu()
     elif isinstance(predictions, list) and isinstance(predictions[0], dict):
         # 리스트 형태의 결과인 경우 (배치 처리)
-        boxes = predictions[0]['boxes'].cpu().numpy()
-        scores = predictions[0]['scores'].cpu().numpy()
-        labels = predictions[0]['labels'].cpu().numpy() 
+        boxes = predictions[0]['boxes'].cpu()
+        scores = predictions[0]['scores'].cpu()
+        labels = predictions[0]['labels'].cpu()
         masks = predictions[0].get('masks', None)
         if masks is not None:
-            masks = masks.cpu().numpy()
+            masks = masks.cpu()
     else:
         print(f"예측 결과의 형식이 예상과 다릅니다. 결과를 처리할 수 없습니다.")
         return None
+    
+    # 임계값 이상인 결과만 선택
+    keep_idx = scores >= score_threshold
+    boxes = boxes[keep_idx]
+    scores = scores[keep_idx]
+    labels = labels[keep_idx]
+    if masks is not None:
+        masks = masks[keep_idx]
+    
+    # 클래스별 NMS 적용
+    final_boxes = []
+    final_scores = []
+    final_labels = []
+    final_masks = []
+    
+    for cls in torch.unique(labels):
+        cls_mask = labels == cls
+        if not cls_mask.any():
+            continue
+            
+        cls_boxes = boxes[cls_mask]
+        cls_scores = scores[cls_mask]
+        
+        # NMS 적용
+        keep = torchvision.ops.nms(cls_boxes, cls_scores, nms_threshold)
+        
+        # 결과 저장
+        final_boxes.append(cls_boxes[keep])
+        final_scores.append(cls_scores[keep])
+        final_labels.append(labels[cls_mask][keep])
+        if masks is not None:
+            final_masks.append(masks[cls_mask][keep])
+    
+    # 결과 병합
+    if final_boxes:
+        final_boxes = torch.cat(final_boxes)
+        final_scores = torch.cat(final_scores)
+        final_labels = torch.cat(final_labels)
+        if masks is not None and final_masks:
+            final_masks = torch.cat(final_masks)
+    else:
+        final_boxes = torch.tensor([])
+        final_scores = torch.tensor([])
+        final_labels = torch.tensor([])
+        if masks is not None:
+            final_masks = torch.tensor([])
+    
+    # 시각화를 위해 numpy로 변환
+    final_boxes_np = final_boxes.numpy()
+    final_scores_np = final_scores.numpy()
+    final_labels_np = final_labels.numpy()
+    final_masks_np = final_masks.numpy() if masks is not None and len(final_masks) > 0 else None
     
     # 클래스 이름 목록
     class_names = ['background', 'xylem']
@@ -205,8 +256,27 @@ def predict_image(model, image_path, device, score_threshold=0.5, save_dir=None)
         save_path = os.path.join(save_dir, f"pred_{base_name}")
     
     # 결과 시각화
-    bbox_result, mask_result = visualize_prediction(image, boxes, masks, scores, 
-                                               labels, class_names, score_threshold, save_path)
+    bbox_result, mask_result = visualize_prediction(
+        image, 
+        final_boxes_np, 
+        final_masks_np, 
+        final_scores_np, 
+        final_labels_np, 
+        class_names, 
+        score_threshold, 
+        save_path
+    )
+    
+    # 새로운 예측 결과 딕셔너리 생성
+    filtered_predictions = {
+        'boxes': final_boxes,
+        'scores': final_scores,
+        'labels': final_labels
+    }
+    if masks is not None:
+        filtered_predictions['masks'] = final_masks
+    
+    return filtered_predictions
     
     print(f"이미지 {image_path} 예측 완료!")
     if save_path:
@@ -214,7 +284,7 @@ def predict_image(model, image_path, device, score_threshold=0.5, save_dir=None)
     
     return predictions
 
-def predict_directory(model, image_dir, device, score_threshold=0.5, save_dir=None):
+def predict_directory(model, image_dir, device, score_threshold=0.5, nms_threshold=0.3, save_dir=None):
     """
     디렉토리 내의 모든 이미지에 대한 예측 수행
     """
@@ -227,7 +297,7 @@ def predict_directory(model, image_dir, device, score_threshold=0.5, save_dir=No
     results = {}
     for image_path in tqdm(image_paths):
         try:
-            result = predict_image(model, image_path, device, score_threshold, save_dir)
+            result = predict_image(model, image_path, device, score_threshold, nms_threshold, save_dir)
             if result is not None:
                 results[image_path] = result
         except Exception as e:
@@ -237,7 +307,7 @@ def predict_directory(model, image_dir, device, score_threshold=0.5, save_dir=No
     
     return results
 
-def predict_directory_with_json(model, image_dir, device, score_threshold=0.5, save_dir=None, json_path=None):
+def predict_directory_with_json(model, image_dir, device, score_threshold=0.5, nms_threshold=0.3, save_dir=None, json_path=None):
     """
     디렉토리 내의 모든 이미지에 대한 예측 수행 후 JSON 파일 생성
     """
@@ -274,7 +344,7 @@ def predict_directory_with_json(model, image_dir, device, score_threshold=0.5, s
             coco_results["images"].append(image_info)
             
             # 예측 수행
-            result = predict_image(model, image_path, device, score_threshold, save_dir)
+            result = predict_image(model, image_path, device, score_threshold, nms_threshold, save_dir)
             
             if result is not None:
                 # 예측 결과 가져오기 (단일 이미지 결과)
@@ -426,6 +496,7 @@ def visualize_from_json(json_path, image_dir, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Mask R-CNN 예측")
+    parser.add_argument("--nms-threshold", type=float, default=0.3, help="NMS 임계값")
     parser.add_argument("--weights", required=True, help="학습된 가중치 파일 경로")
     parser.add_argument("--input", required=True, help="예측할 이미지 경로 또는 디렉토리 경로")
     parser.add_argument("--num-classes", type=int, default=2, help="클래스 수 (배경 포함)")
@@ -462,20 +533,22 @@ def main():
     if is_directory:
         # JSON 파일 생성
         if args.json_path:
-            predict_directory_with_json(model, args.input, device, args.threshold, args.save_dir, args.json_path)
+            predict_directory_with_json(model, args.input, device, args.threshold, args.nms_threshold, args.save_dir, args.json_path)
             
             # JSON 파일로부터 어노테이션 시각화
             if args.visualize and args.json_path:
                 output_dir = os.path.join(args.save_dir, "annotated") if args.save_dir else "annotated_images"
                 visualize_from_json(args.json_path, args.input, output_dir)
         else:
-            predict_directory(model, args.input, device, args.threshold, args.save_dir)
+            predict_directory(model, args.input, device, args.threshold, args.nms_threshold, args.save_dir)
     else:
         # 단일 이미지 예측
         if not args.input.lower().endswith('.png'):
             print("경고: 입력 파일이 PNG 형식이 아닙니다. 처리가 실패할 수 있습니다.")
         
-        predict_image(model, args.input, device, args.threshold, args.save_dir)
+        predict_image(model, args.input, device, args.threshold, args.nms_threshold, args.save_dir)
+        
+        predict_image(model, args.input, device, args.threshold, args.nms_threshold, args.save_dir)
 
 if __name__ == "__main__":
     main()
