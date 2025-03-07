@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class DoubleConv(nn.Module):
-    """U-Net에서 사용되는 이중 컨볼루션 블록"""
+    """Double convolution block used in U-Net"""
     def __init__(self, in_channels, out_channels, mid_channels=None):
         super().__init__()
         if not mid_channels:
@@ -21,7 +21,7 @@ class DoubleConv(nn.Module):
         return self.double_conv(x)
 
 class Down(nn.Module):
-    """다운샘플링 경로"""
+    """Downsampling path"""
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.maxpool_conv = nn.Sequential(
@@ -33,11 +33,11 @@ class Down(nn.Module):
         return self.maxpool_conv(x)
 
 class Up(nn.Module):
-    """업샘플링 경로"""
+    """Upsampling path"""
     def __init__(self, in_channels, out_channels, bilinear=True):
         super().__init__()
 
-        # 업샘플링 방식 선택
+        # Choose upsampling method
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
@@ -47,18 +47,18 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        # 입력 텐서 크기가 2의 배수가 아닌 경우 패딩 처리
+        # Handle padding if input tensor size is not a multiple of 2
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
 
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
-        # skip connection 연결
+        # Connect skip connection
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
 class OutConv(nn.Module):
-    """출력 컨볼루션 레이어"""
+    """Output convolution layer"""
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
@@ -67,7 +67,7 @@ class OutConv(nn.Module):
         return self.conv(x)
 
 class AttentionGate(nn.Module):
-    """어텐션 게이트 모듈"""
+    """Attention Gate Module"""
     def __init__(self, F_g, F_l, F_int):
         super(AttentionGate, self).__init__()
         self.W_g = nn.Sequential(
@@ -97,7 +97,7 @@ class AttentionGate(nn.Module):
         return x * psi
 
 class XylemUNet(nn.Module):
-    """경계 인식에 중점을 둔, 세그멘테이션 및 경계 탐지를 위한 U-Net"""
+    """U-Net for segmentation and boundary detection with focus on boundary awareness"""
     def __init__(self, n_channels=3, n_classes=1, bilinear=True, with_attention=True):
         super(XylemUNet, self).__init__()
         self.n_channels = n_channels
@@ -105,7 +105,7 @@ class XylemUNet(nn.Module):
         self.bilinear = bilinear
         self.with_attention = with_attention
 
-        # 인코더
+        # Encoder
         self.inc = DoubleConv(n_channels, 64)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
@@ -113,23 +113,23 @@ class XylemUNet(nn.Module):
         factor = 2 if bilinear else 1
         self.down4 = Down(512, 1024 // factor)
 
-        # 어텐션 게이트
+        # Attention Gates
         if with_attention:
             self.attention1 = AttentionGate(512, 256, 128)
             self.attention2 = AttentionGate(256, 128, 64)
             self.attention3 = AttentionGate(128, 64, 32)
 
-        # 디코더
+        # Decoder
         self.up1 = Up(1024, 512 // factor, bilinear)
         self.up2 = Up(512, 256 // factor, bilinear)
         self.up3 = Up(256, 128 // factor, bilinear)
         self.up4 = Up(128, 64, bilinear)
         
-        # 출력 헤드: 세그멘테이션 마스크와 경계 마스크
+        # Output heads: segmentation mask and boundary mask
         self.outc = OutConv(64, n_classes)
-        self.outc_boundary = OutConv(64, 1)  # 경계 검출을 위한 추가 출력
+        self.outc_boundary = OutConv(64, 1)  # Additional output for boundary detection
 
-        # 모델 파라미터 초기화
+        # Initialize model parameters
         self._initialize_weights()
 
     def _initialize_weights(self):
@@ -143,33 +143,33 @@ class XylemUNet(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        # 인코더 경로
+        # Encoder path
         x1 = self.inc(x)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         x5 = self.down4(x4)
 
-        # 어텐션 적용 (있는 경우)
+        # Apply attention (if enabled)
         if self.with_attention:
             x3 = self.attention1(x4, x3)
             x2 = self.attention2(x3, x2)
             x1 = self.attention3(x2, x1)
 
-        # 디코더 경로
+        # Decoder path
         x = self.up1(x5, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
         x = self.up4(x, x1)
         
-        # 세그멘테이션 및 경계 마스크 출력
+        # Output segmentation and boundary masks
         logits = self.outc(x)
         boundary_logits = self.outc_boundary(x)
         
         return logits, boundary_logits
 
     def use_checkpointing(self):
-        """메모리 최적화를 위한 체크포인팅 활성화"""
+        """Enable checkpointing for memory optimization"""
         self.inc = torch.utils.checkpoint.checkpoint(self.inc)
         self.down1 = torch.utils.checkpoint.checkpoint(self.down1)
         self.down2 = torch.utils.checkpoint.checkpoint(self.down2)
@@ -183,7 +183,7 @@ class XylemUNet(nn.Module):
         self.outc_boundary = torch.utils.checkpoint.checkpoint(self.outc_boundary)
 
 class XylemUNetLoss(nn.Module):
-    """Xylem 세그멘테이션을 위한 복합 손실 함수"""
+    """Composite loss function for Xylem segmentation"""
     def __init__(self, boundary_weight=2.0, dice_weight=1.0, bce_weight=1.0):
         super(XylemUNetLoss, self).__init__()
         self.boundary_weight = boundary_weight
@@ -192,11 +192,11 @@ class XylemUNetLoss(nn.Module):
         self.bce_loss = nn.BCEWithLogitsLoss()
         
     def dice_loss(self, pred, target):
-        """Dice 손실 계산"""
+        """Calculate Dice loss"""
         smooth = 1.0
         pred = torch.sigmoid(pred)
         
-        # 배치 차원을 따라 평탄화
+        # Flatten along batch dimension
         pred_flat = pred.view(-1)
         target_flat = target.view(-1)
         
@@ -208,46 +208,46 @@ class XylemUNetLoss(nn.Module):
         
     def forward(self, pred_mask, pred_boundary, target_mask, target_boundary=None):
         """
-        통합 손실 계산
+        Calculate integrated loss
         
         Args:
-            pred_mask: 예측된 세그멘테이션 마스크
-            pred_boundary: 예측된 경계 마스크
-            target_mask: 정답 세그멘테이션 마스크
-            target_boundary: 정답 경계 마스크 (없으면 타겟에서 유도)
+            pred_mask: Predicted segmentation mask
+            pred_boundary: Predicted boundary mask
+            target_mask: Ground truth segmentation mask
+            target_boundary: Ground truth boundary mask (if None, derived from target)
         """
-        # 경계 마스크가 없는 경우 생성
+        # Generate boundary mask if not provided
         if target_boundary is None:
-            # 경계 추출을 위한 커널 정의
+            # Define kernel for boundary extraction
             kernel_size = 3
-            # 마스크를 팽창시키기 위해 max_pool2d 사용
+            # Use max_pool2d to dilate the mask
             dilated = F.max_pool2d(
                 target_mask, 
                 kernel_size=kernel_size, 
                 stride=1, 
                 padding=kernel_size//2
             )
-            # 마스크를 침식시키기 위해 반전된 마스크에 max_pool2d 적용
+            # Apply max_pool2d to inverted mask for erosion
             eroded = 1.0 - F.max_pool2d(
                 1.0 - target_mask,
                 kernel_size=kernel_size,
                 stride=1,
                 padding=kernel_size//2
             )
-            # 경계 = 팽창 - 침식
+            # Boundary = dilation - erosion
             target_boundary = (dilated - eroded).clamp(0, 1)
         
-        # 세그멘테이션 손실
+        # Segmentation loss
         bce_seg_loss = self.bce_loss(pred_mask, target_mask)
         dice_seg_loss = self.dice_loss(pred_mask, target_mask)
         seg_loss = self.bce_weight * bce_seg_loss + self.dice_weight * dice_seg_loss
         
-        # 경계 손실 (가중치 적용)
+        # Boundary loss (with weight applied)
         bce_boundary_loss = self.bce_loss(pred_boundary, target_boundary)
         dice_boundary_loss = self.dice_loss(pred_boundary, target_boundary)
         boundary_loss = self.boundary_weight * (self.bce_weight * bce_boundary_loss + self.dice_weight * dice_boundary_loss)
         
-        # 총 손실
+        # Total loss
         total_loss = seg_loss + boundary_loss
         
         return total_loss, {
@@ -255,14 +255,14 @@ class XylemUNetLoss(nn.Module):
             'boundary_loss': boundary_loss.item()
         }
 
-# 모델 사용 예시
+# Example usage
 def create_xylem_unet(n_channels=3, n_classes=1, with_attention=True, device='cuda'):
-    """Xylem 세그멘테이션을 위한 U-Net 모델 생성"""
+    """Create U-Net model for Xylem segmentation"""
     model = XylemUNet(n_channels, n_classes, bilinear=True, with_attention=with_attention)
     return model.to(device)
 
 def train_xylem_unet(model, train_loader, val_loader, num_epochs=100, lr=0.001, device='cuda'):
-    """Xylem U-Net 모델 훈련"""
+    """Train Xylem U-Net model"""
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
     criterion = XylemUNetLoss(boundary_weight=2.0)
@@ -270,7 +270,7 @@ def train_xylem_unet(model, train_loader, val_loader, num_epochs=100, lr=0.001, 
     best_val_loss = float('inf')
     
     for epoch in range(num_epochs):
-        # 훈련 모드
+        # Training mode
         model.train()
         train_loss = 0.0
         
