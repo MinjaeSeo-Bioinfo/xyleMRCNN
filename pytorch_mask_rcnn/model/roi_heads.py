@@ -205,14 +205,13 @@ class RoIHeads(nn.Module):
         if self.has_mask():
             if self.training:
                 num_pos = regression_target.shape[0]
-                print(f"양성 샘플 수: {num_pos}")  # 디버깅 출력
                 
                 mask_proposal = proposal[:num_pos]
                 pos_matched_idx = matched_idx[:num_pos]
                 mask_label = label[:num_pos]
                 
                 if mask_proposal.shape[0] == 0:
-                    print("경고: 양성 샘플이 없어 마스크 손실이 0입니다!")  # 디버깅 출력
+                    print("ERROR : Check roi_heads.py line 213")
                     losses.update(dict(roi_mask_loss=torch.tensor(0)))
                     return result, losses
             else:
@@ -242,3 +241,4 @@ class RoIHeads(nn.Module):
                 result.update(dict(masks=mask_prob))
                 
         return result, losses
+
