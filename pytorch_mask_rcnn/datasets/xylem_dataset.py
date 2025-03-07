@@ -1,72 +1,72 @@
 import os
 import cv2
 import json
-import numpy as np
 import torch
+import numpy as np
+import torchvision.transforms as transforms
+import torchvision.transforms.functional as F
 from PIL import Image
 from pycocotools.coco import COCO
 from .generalized_dataset import GeneralizedDataset
-import torchvision.transforms.functional as F
-import torchvision.transforms as transforms
 
 class XylemDataset(GeneralizedDataset):
     def __init__(self, data_dir, split, train=False):
         super().__init__()
-        from pycocotools.coco import COCO
         
+        # Set data directory, split, and training mode
         self.data_dir = data_dir
         self.split = split
         self.train = train
         
-        # 이미지 및 어노테이션 경로 설정
+        # Set image and annotation paths
         self.img_dir = os.path.join(data_dir, "augmented", "images", split)
         ann_file = os.path.join(data_dir, "augmented", "annotations", f"augmentation_{split}.json")
         
-        # COCO API 초기화
+        # Initialize COCO API
         self.coco = COCO(ann_file)
         
-        # 이미지 ID 가져오기 (확실하게 정수로 변환)
+        # Get image IDs
         img_ids = sorted([int(img_id) for img_id in self.coco.getImgIds()])
-        print(f"이미지 ID 범위: {min(img_ids)}부터 {max(img_ids)}까지, 총 {len(img_ids)}개")
-        self.ids = img_ids  # 명확하게 정수 리스트로 저장
+        print(f"Image ID range: from {min(img_ids)} to {max(img_ids)}, total {len(img_ids)} images")
+        self.ids = img_ids
 
-        # 유효한 ID 범위 확인
+        # Check valid ID range
         coco_img_ids = set(self.coco.imgs.keys())
-        print(f"COCO 이미지 ID 범위: {min(coco_img_ids)}부터 {max(coco_img_ids)}까지")
+        print(f"COCO image ID range: from {min(coco_img_ids)} to {max(coco_img_ids)}")
         
-        # 클래스 정의 (배경은 0)
-        self.classes = [0]  # 배경 클래스
+        # Define classes (background is 0)
+        self.classes = [0]  # Background class
         self.classes.extend(sorted(self.coco.cats.keys()))
 
-        # 데이터셋 체크
+        # Dataset check
         checked_id_file = os.path.join(data_dir, "checked_{}.txt".format(split))
         if train:
             if not os.path.exists(checked_id_file):
                 self._aspect_ratios = [v["width"] / v["height"] for v in self.coco.imgs.values()]
             self.check_dataset(checked_id_file)
         
-        # check_dataset에서 self.ids가 문자열로 변경되었을 수 있으므로 다시 정수로 변환
+        # Convert self.ids back to integers if changed to strings in check_dataset
         self.ids = [int(id) for id in self.ids]
                 
-        # 카테고리 매핑 생성
+        # Create category mapping
         cats = list(self.coco.cats.values())
         self.cat_ids = {cat['id']: i+1 for i, cat in enumerate(cats)}
             
     def get_image(self, img_id):
-        # 이미지 ID 타입 확인 및 변환
+        # Check and convert image ID type
         if isinstance(img_id, str):
             img_id = int(img_id)
             
-        # 이미지 ID가 데이터셋에 존재하는지 확인
+        # Check if image ID exists in dataset
         if img_id not in self.coco.imgs:
-            raise KeyError(f"이미지 ID {img_id}가 데이터셋에 존재하지 않습니다. 유효한 ID 범위: {min(self.ids)}~{max(self.ids)}")
+            raise KeyError(f"Image ID {img_id} does not exist in the dataset. Valid ID range: {min(self.ids)}~{max(self.ids)}")
         
         img_info = self.coco.imgs[img_id]
         image_path = os.path.join(self.img_dir, img_info["file_name"])
         
-        # 파일 존재 여부 확인
+        # Check file existence
         if not os.path.isfile(image_path):
-            raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {image_path}")
+            raise FileNotFoundError(f"Image file not found: {image_path}")
             
         image = Image.open(image_path)
         return image.convert("RGB")
@@ -75,17 +75,17 @@ class XylemDataset(GeneralizedDataset):
         if boxes is None or len(boxes) == 0:
             return boxes
             
-        # [x, y, width, height]를 [x1, y1, x2, y2]로 변환
+        # Convert [x, y, width, height] to [x1, y1, x2, y2]
         x1 = boxes[:, 0]
         y1 = boxes[:, 1]
         x2 = boxes[:, 0] + boxes[:, 2]
         y2 = boxes[:, 1] + boxes[:, 3]
         
-        # [x1, y1, x2, y2] 형식으로 스택
+        # Stack in [x1, y1, x2, y2] format
         return torch.stack((x1, y1, x2, y2), dim=1)
     
     def get_target(self, img_id):
-        # 이미지 ID 타입 확인 및 변환
+        # Check and convert image ID type
         if isinstance(img_id, str):
             img_id = int(img_id)
         
@@ -139,9 +139,9 @@ class XylemDataset(GeneralizedDataset):
  
     def __getitem__(self, idx):
         if idx >= len(self.ids):
-            raise IndexError(f"인덱스 {idx}가 데이터셋 크기({len(self.ids)})를 초과했습니다.")
+            raise IndexError(f"Index {idx} exceeds dataset size ({len(self.ids)}).")
         
-        # self.ids[idx]가 여전히 문자열이라면 정수로 변환
+        # Convert self.ids[idx] to integer if it's still a string
         if isinstance(self.ids[idx], str):
             img_id = int(self.ids[idx])
         else:
@@ -160,4 +160,3 @@ class XylemDataset(GeneralizedDataset):
     def convert_to_coco_api(ds):
         """Convert to COCO API format"""
         return ds.coco
-
