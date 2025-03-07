@@ -1,8 +1,6 @@
 import math
-
 import torch
 import torch.nn.functional as F
-
 
 class Transformer:
     def __init__(self, min_size, max_size, image_mean, image_std):
@@ -74,7 +72,6 @@ class Transformer:
             
         return result
 
-
 def expand_detection(mask, box, padding):
     M = mask.shape[-1]
     scale = (M + 2 * padding) / M
@@ -94,7 +91,6 @@ def expand_detection(mask, box, padding):
     box_exp[:, 1] = y_c - h_half
     box_exp[:, 3] = y_c + h_half
     return padded_mask, box_exp.to(torch.int64)
-
 
 def paste_masks_in_image(mask, box, padding, image_shape):
     mask, box = expand_detection(mask, box, padding)
