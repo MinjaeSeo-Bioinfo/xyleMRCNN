@@ -9,7 +9,8 @@ def datasets(ds, *args, **kwargs):
         return XylemDataset(*args, **kwargs)
     else:
         raise ValueError("'ds' must be in '{}', but got '{}'".format(choice, ds))
-    
+
+#---------------Batch size---------------#
 def collate_wrapper(batch):
     return CustomBatch(batch)
     
