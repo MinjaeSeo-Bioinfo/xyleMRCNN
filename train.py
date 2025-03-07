@@ -14,8 +14,6 @@ def main(args):
     print("\\ndevice: {}".format(device))
     
     # ---------------------- prepare data loader ------------------------------- #
-    # debugging - dataset work 
-    print(f"Dataset argument received: {args.dataset}")
      
     dataset_train = pmr.datasets(args.dataset, args.data_dir, "train", train=True)
     indices = torch.randperm(len(dataset_train)).tolist()
@@ -31,7 +29,7 @@ def main(args):
     # +1 for include background class
     num_classes = max(d_train.dataset.classes) + 1 
     # ResNet-50 backbone Mask R-CNN Model create
-    model = pmr.maskrcnn_resnet50(True, num_classes, boundary_weight=args.boundary_weight).to(device)
+    model = pmr.maskrcnn_se_resnet50(True, num_classes, boundary_weight=args.boundary_weight).to(device)
     
     
     #@@@@@@@@ COCO pretrained weight download @@@@@@@@@@@
