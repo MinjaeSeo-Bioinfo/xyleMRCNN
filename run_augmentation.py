@@ -58,7 +58,7 @@ def main():
         base_dir = '/gdrive/MyDrive/HyunsLab/Xylemrcnn'
     
     # 증강 설정
-    num_augmentations = 25  # 20장을 500장 이상으로 만들기 위해 25배 증강
+    num_augmentations = 5  # 40장을 200장 이상으로 만들기 위해 5배 증강
     splits = ['train', 'val']
     
     for split in splits:
