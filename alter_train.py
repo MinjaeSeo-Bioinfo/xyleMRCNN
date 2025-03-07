@@ -1,3 +1,4 @@
+import sys
 import bisect
 import glob
 import os
@@ -6,8 +7,8 @@ import time
 import torch
 import pytorch_mask_rcnn as pmr
 import argparse
-from pytorch_mask_rcnn.model.UNet import XylemUNet, XylemUNetLoss 
-from pytorch_mask_rcnn.model.mask_rcnn import maskrcnn_se_resnet50
+from torch.utils.data import DataLoader
+from pytorch_mask_rcnn.datasets.utils import collate_wrapper
 
 BASE_DIR = '/gdrive/MyDrive/HyunsLab/Xylemrcnn'
 DATASET_DIR = os.path.join(BASE_DIR, 'dataset')
@@ -22,21 +23,69 @@ def main(args):
     # ---------------------- prepare data loader ------------------------------- #
     print(f"Dataset argument received: {args.dataset}")
      
+    # 하나의 데이터셋을 두 모델이 공유
     dataset_train = pmr.datasets(args.dataset, args.data_dir, "train", train=True)
-    indices = torch.randperm(len(dataset_train)).tolist()
-    d_train = torch.utils.data.Subset(dataset_train, indices)
     
+    # 전체 데이터셋을 섞고 두 개의 동일한 크기의 부분으로 나눔
+    indices = torch.randperm(len(dataset_train)).tolist()
+    split_point = len(indices) // 2
+    
+    # Mask R-CNN용 데이터셋
+    maskrcnn_indices = indices[:split_point]
+    d_train_maskrcnn = torch.utils.data.Subset(dataset_train, maskrcnn_indices)
+    
+    # U-Net용 데이터셋
+    unet_indices = indices[split_point:]
+    d_train_unet = torch.utils.data.Subset(dataset_train, unet_indices)
+    
+    # 두 개의 데이터로더 생성
+    maskrcnn_loader = DataLoader(
+        d_train_maskrcnn, 
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.workers,
+        collate_fn=collate_wrapper
+    )
+    
+    unet_loader = DataLoader(
+        d_train_unet,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.workers,
+        collate_fn=collate_wrapper
+    )
+    
+    # 검증 데이터셋
     d_test = pmr.datasets(args.dataset, args.data_dir, "val", train=True)
     
-    args.warmup_iters = max(1000, len(d_train))
+    args.warmup_iters = max(1000, len(d_train_maskrcnn))
     
     # -------------------------------------------------------------------------- #
     
     print(args)
     # +1 for include background class
-    num_classes = max(d_train.dataset.classes) + 1 
+    num_classes = max(dataset_train.classes) + 1 
     
     # ---------------------- Create models ------------------------------------- #
+    # 모델 임포트 - 직접 파일에서 임포트
+    import sys
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 현재 스크립트 경로 추가
+    
+    # 직접 임포트 시도
+    try:
+        from pytorch_mask_rcnn.model.mask_rcnn import maskrcnn_se_resnet50
+    except ImportError:
+        print("maskrcnn_se_resnet50 임포트 실패, 대안 사용")
+        from pytorch_mask_rcnn.model.mask_rcnn import MaskRCNN
+        from pytorch_mask_rcnn.model.SENet import SEResBackbone
+        
+        def maskrcnn_se_resnet50(pretrained, num_classes, boundary_weight=2.0):
+            backbone = SEResBackbone('resnet50', pretrained_backbone=False)
+            model = MaskRCNN(backbone, num_classes, boundary_weight=boundary_weight)
+            return model
+            
+    from pytorch_mask_rcnn.model.UNet import XylemUNet, XylemUNetLoss
+    
     # 1. Mask R-CNN 모델 생성
     maskrcnn = maskrcnn_se_resnet50(True, num_classes, boundary_weight=args.boundary_weight).to(device)
     
@@ -125,57 +174,53 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         print("\nepoch: {}".format(epoch + 1))
         
-        # 배치 인덱스 추적
-        batch_idx = 0
+        # 각 모델의 에포크 시작 시간 기록
+        maskrcnn_start = time.time()
         
         # Mask R-CNN 훈련
         print("Training Mask R-CNN...")
-        A = time.time()
         args.lr_epoch = lr_lambda(epoch) * args.lr
         print("Mask R-CNN lr_epoch: {:.5f}, factor: {:.5f}".format(args.lr_epoch, lr_lambda(epoch)))
         
-        # train_one_epoch에 배치 인덱스 전달 (짝수 배치만 훈련)
-        iter_train_maskrcnn = train_alternating(maskrcnn, None, maskrcnn_optimizer, None, 
-                                               None, d_train, device, epoch, args, 
-                                               is_maskrcnn=True)
-        A = time.time() - A
+        # engine.py의 train_one_epoch_custom 함수 사용
+        iter_train_maskrcnn = pmr.train_one_epoch_custom(maskrcnn, maskrcnn_optimizer, maskrcnn_loader, device, epoch, args)
+        maskrcnn_train_time = time.time() - maskrcnn_start
         
-        # U-Net 훈련
+        # U-Net 훈련 시작
+        unet_start = time.time()
         print("Training U-Net...")
-        C = time.time()
         # U-Net은 Adam 옵티마이저를 사용하므로 학습률 직접 설정
         for param_group in unet_optimizer.param_groups:
             param_group['lr'] = args.lr * 0.1 * lr_lambda(epoch)
         print("U-Net lr_epoch: {:.5f}, factor: {:.5f}".format(args.lr * 0.1 * lr_lambda(epoch), lr_lambda(epoch)))
         
-        # train_one_epoch에 배치 인덱스 전달 (홀수 배치만 훈련)
-        iter_train_unet = train_alternating(None, unet, None, unet_optimizer, 
-                                           unet_criterion, d_train, device, epoch, args,
-                                           is_maskrcnn=False)
-        C = time.time() - C
+        # U-Net 훈련
+        iter_train_unet = train_unet(unet, unet_optimizer, unet_criterion, unet_loader, device, epoch, args)
+        unet_train_time = time.time() - unet_start
         
-        # Mask R-CNN 평가
+        # 평가 시작
+        # Mask R-CNN 평가 - 수정된 evaluate_custom 함수 사용
         print("Evaluating Mask R-CNN...")
-        B = time.time()
-        eval_output_maskrcnn, iter_eval_maskrcnn = pmr.evaluate(maskrcnn, d_test, device, args)
-        B = time.time() - B
+        maskrcnn_eval_start = time.time()
+        eval_output_maskrcnn, iter_eval_maskrcnn = evaluate_custom(maskrcnn, d_test, device, args)
+        maskrcnn_eval_time = time.time() - maskrcnn_eval_start
         
         # U-Net 평가
         print("Evaluating U-Net...")
-        D = time.time()
+        unet_eval_start = time.time()
         unet_val_loss = validate_unet(unet, unet_criterion, d_test, device)
         unet_val_loss_history.append(unet_val_loss)
-        D = time.time() - D
+        unet_eval_time = time.time() - unet_eval_start
 
         trained_epoch = epoch + 1
-        print("Mask R-CNN - training: {:.1f} s, evaluation: {:.1f} s".format(A, B))
-        print("U-Net - training: {:.1f} s, evaluation: {:.1f} s".format(C, D))
+        print("Mask R-CNN - training: {:.1f} s, evaluation: {:.1f} s".format(maskrcnn_train_time, maskrcnn_eval_time))
+        print("U-Net - training: {:.1f} s, evaluation: {:.1f} s".format(unet_train_time, unet_eval_time))
         
         # GPU 정보 수집
         pmr.collect_gpu_info("maskrcnn", [1 / iter_train_maskrcnn, 1 / iter_eval_maskrcnn])
         
         # 체크포인트 저장
-        # Mask R-CNN 체크포인트
+        # Mask R-CNN 체크포인트 - pmr.save_ckpt 사용
         pmr.save_ckpt(maskrcnn, maskrcnn_optimizer, trained_epoch, args.maskrcnn_ckpt_path, 
                       eval_info=str(eval_output_maskrcnn))
         
@@ -211,143 +256,91 @@ def main(args):
     if start_epoch < args.epochs:
         print("already trained: {} epochs\n".format(trained_epoch))
 
-# 배치 교대 훈련 함수
-def train_alternating(maskrcnn, unet, maskrcnn_optimizer, unet_optimizer, 
-                     unet_criterion, data_loader, device, epoch, args, is_maskrcnn=True):
+# U-Net 훈련 함수
+def train_unet(model, optimizer, criterion, data_loader, device, epoch, args):
     """
-    배치 교대 방식으로 Mask R-CNN 또는 U-Net 훈련
+    U-Net 모델 훈련
     """
-    # 배치 인덱스 설정
-    batch_idx = 0
-    
-    # 이터레이션 설정
+    model.train()
     iters = len(data_loader) if args.iters < 0 else args.iters
     
-    # 모델 설정
-    if is_maskrcnn:
-        maskrcnn.train()
-        t_m = pmr.utils.Meter("total")
-        m_m = pmr.utils.Meter("model")
-        b_m = pmr.utils.Meter("backward")
-    else:
-        unet.train()
-        total_loss = 0.0
+    t_m = pmr.utils.Meter("total")
+    m_m = pmr.utils.Meter("model")
+    b_m = pmr.utils.Meter("backward")
     
+    total_loss = 0.0
+    processed_batches = 0
     A = time.time()
     
-    # 데이터 로더에서 배치 가져오기
-    for i, data in enumerate(data_loader):
+    for i, batch_data in enumerate(data_loader):
         if i >= iters:
             break
+            
+        T = time.time()
         
-        # 데이터 로더 구조에 맞게 수정
-        # data는 (images, targets) 형태의 튜플일 수 있음
-        if isinstance(data, tuple) and len(data) == 2:
-            images, targets = data
+        # 데이터 준비
+        if isinstance(batch_data, list) and len(batch_data) == 2:
+            images, targets = batch_data
         else:
-            # 데이터 로더가 CustomBatch 객체를 반환하는 경우
             try:
-                images = data.images
-                targets = data.targets
+                images = batch_data.images
+                targets = batch_data.targets
             except AttributeError:
-                print(f"Unexpected batch format: {type(data)}")
-                # 디버깅을 위해 데이터 구조 출력
-                print(f"Data structure: {data}")
+                print(f"Unexpected batch format: {type(batch_data)}")
                 continue
         
-        # 짝수 배치는 Mask R-CNN, 홀수 배치는 U-Net
-        if (is_maskrcnn and i % 2 == 0) or (not is_maskrcnn and i % 2 == 1):
-            T = time.time()
-            
-            if is_maskrcnn:
-                # Mask R-CNN 훈련
-                num_iters = epoch * len(data_loader) + i
-                if num_iters <= args.warmup_iters:
-                    r = num_iters / args.warmup_iters
-                    for j, p in enumerate(maskrcnn_optimizer.param_groups):
-                        p["lr"] = r * args.lr_epoch
-            
-            if is_maskrcnn:
-                # Mask R-CNN 훈련
-                # 데이터 준비
-                images = batch.images
-                targets = batch.targets
-                
-                num_iters = epoch * len(data_loader) + i
-                if num_iters <= args.warmup_iters:
-                    r = num_iters / args.warmup_iters
-                    for j, p in enumerate(maskrcnn_optimizer.param_groups):
-                        p["lr"] = r * args.lr_epoch
-                
-                # 데이터를 디바이스로 이동
-                images = [img.to(device) for img in images]
-                targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-                
-                S = time.time()
-                losses = maskrcnn(images, targets)
-                total_loss = sum(losses.values())
-                m_m.update(time.time() - S)
-                
-                S = time.time()
-                total_loss.backward()
-                b_m.update(time.time() - S)
-                
-                maskrcnn_optimizer.step()
-                maskrcnn_optimizer.zero_grad()
-                
-                if num_iters % args.print_freq == 0:
-                    print("{}\t".format(num_iters), "\t".join("{:.3f}".format(l.item()) for l in losses.values()))
-                
-                t_m.update(time.time() - T)
-                batch_idx += 1
+        # 배치 이미지 스택
+        images = torch.stack([img.to(device) for img in images])
+        
+        # 마스크 준비
+        masks = []
+        for t in targets:
+            if "masks" in t and t["masks"].numel() > 0:
+                # 모든 인스턴스 마스크 결합
+                instance_masks = t["masks"].to(device)
+                combined_mask = torch.any(instance_masks > 0.5, dim=0).float()
+                masks.append(combined_mask)
             else:
-                # U-Net 훈련
-                # 데이터 준비
-                images = batch.images
-                targets = batch.targets
-                
-                # 배치 이미지 스택
-                images = torch.stack([img.to(device) for img in images])
-                
-                # 마스크 준비
-                masks = []
-                for t in targets:
-                    if "masks" in t and t["masks"].numel() > 0:
-                        # 모든 인스턴스 마스크 결합
-                        instance_masks = t["masks"].to(device)
-                        combined_mask = torch.any(instance_masks > 0.5, dim=0).float()
-                        masks.append(combined_mask)
-                    else:
-                        # 빈 마스크 처리
-                        h, w = images[0].shape[-2:]
-                        masks.append(torch.zeros((h, w), device=device))
-                
-                # 마스크 텐서 준비
-                masks = torch.stack(masks).unsqueeze(1)  # [B, 1, H, W]
-                
-                # U-Net 훈련
-                unet_optimizer.zero_grad()
-                seg_pred, boundary_pred = unet(images)
-                loss, loss_dict = unet_criterion(seg_pred, boundary_pred, masks)
-                loss.backward()
-                unet_optimizer.step()
-                
-                total_loss += loss.item()
-                
-                if i % args.print_freq == 0:
-                    print(f"Batch {i}/{iters}, U-Net loss: {loss.item():.4f}")
-                
-                batch_idx += 1
+                # 빈 마스크 처리
+                h, w = images[0].shape[-2:]
+                masks.append(torch.zeros((h, w), device=device))
+        
+        # 마스크 텐서 준비
+        masks = torch.stack(masks).unsqueeze(1)  # [B, 1, H, W]
+        
+        # U-Net 훈련
+        S = time.time()
+        optimizer.zero_grad()
+        seg_pred, boundary_pred = model(images)
+        loss, loss_dict = criterion(seg_pred, boundary_pred, masks)
+        m_m.update(time.time() - S)
+        
+        S = time.time()
+        loss.backward()
+        b_m.update(time.time() - S)
+        
+        optimizer.step()
+        
+        batch_loss = loss.item()
+        total_loss += batch_loss
+        
+        # 손실 출력
+        if i % args.print_freq == 0:
+            print(f"U-Net [{i}/{iters}], loss: {batch_loss:.4f}")
+        
+        t_m.update(time.time() - T)
+        processed_batches += 1
     
     A = time.time() - A
     
-    if is_maskrcnn:
-        print("iter: {:.1f}, total: {:.1f}, model: {:.1f}, backward: {:.1f}".format(
-            1000*A/batch_idx, 1000*t_m.avg, 1000*m_m.avg, 1000*b_m.avg))
+    if processed_batches > 0:
+        avg_loss = total_loss / processed_batches
+        print("U-Net - iter: {:.1f}, total: {:.1f}, model: {:.1f}, backward: {:.1f}, avg_loss: {:.4f}".format(
+            1000*A/processed_batches, 1000*t_m.avg, 1000*m_m.avg, 1000*b_m.avg, avg_loss))
     else:
-        print(f"U-Net average loss: {total_loss/batch_idx:.4f}")
+        print("No U-Net batches were processed")
     
-    return A / batch_idx
+    return A / max(processed_batches, 1)
 
 # U-Net 검증 함수
 def validate_unet(model, criterion, data_loader, device):
@@ -359,10 +352,17 @@ def validate_unet(model, criterion, data_loader, device):
     num_batches = 0
     
     with torch.no_grad():
-        for batch in data_loader:
+        for batch_data in data_loader:
             # 데이터 준비
-            images = batch.images
-            targets = batch.targets
+            if isinstance(batch_data, list) and len(batch_data) == 2:
+                images, targets = batch_data
+            else:
+                try:
+                    images = batch_data.images
+                    targets = batch_data.targets
+                except AttributeError:
+                    print(f"Unexpected batch format: {type(batch_data)}")
+                    continue
             
             # 배치 이미지 스택
             images = torch.stack([img.to(device) for img in images])
@@ -381,17 +381,18 @@ def validate_unet(model, criterion, data_loader, device):
                     masks.append(torch.zeros((h, w), device=device))
             
             # 마스크 텐서 준비
-            masks = torch.stack(masks).unsqueeze(1)  # [B, 1, H, W]
-            
-            # U-Net 예측
-            seg_pred, boundary_pred = model(images)
-            loss, _ = criterion(seg_pred, boundary_pred, masks)
-            
-            total_loss += loss.item()
-            num_batches += 1
+            if len(masks) > 0:
+                masks = torch.stack(masks).unsqueeze(1)  # [B, 1, H, W]
+                
+                # U-Net 예측
+                seg_pred, boundary_pred = model(images)
+                loss, _ = criterion(seg_pred, boundary_pred, masks)
+                
+                total_loss += loss.item()
+                num_batches += 1
     
     # 평균 손실 계산
-    avg_loss = total_loss / num_batches
+    avg_loss = total_loss / max(num_batches, 1)  # 분모가 0이 되지 않도록 함
     print(f"U-Net validation loss: {avg_loss:.4f}")
     
     return avg_loss
@@ -414,9 +415,9 @@ def save_unet_ckpt(model, optimizer, epochs, ckpt_path, loss_info):
     
     # 최신 체크포인트 복사
     torch.save(checkpoint, ckpt_path)
-
+    
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mask R-CNN과 U-Net 교대 훈련")
+    parser = argparse.ArgumentParser(description="Mask R-CNN과 U-Net 병렬 훈련")
     
     # 데이터 관련 인자
     parser.add_argument("--batch-size", type=int, default=1)
@@ -456,3 +457,4 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(args.unet_ckpt_path), exist_ok=True)
 
     main(args)
+
